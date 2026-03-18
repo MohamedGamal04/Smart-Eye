@@ -1,0 +1,178 @@
+name: Build SmartEye
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: "x64"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Check for model bundle
+        id: check_models
+        shell: pwsh
+        run: |
+          $hasModels = (Get-ChildItem -Path "data/models" -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0
+          "has_models=$($hasModels.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Build with Nuitka
+        uses: Nuitka/Nuitka-Action@main
+        with:
+          nuitka-version: main
+          script-name: main.py
+          mode: standalone
+          output-dir: build
+          output-file: SmartEye
+          jobs: "2"
+          lto: "no"
+          windows-console-mode: disable
+          enable-plugins: pyside6
+          show-scons: true
+          include-package: |
+            cv2
+            numpy
+            psutil
+            PySide6
+            shiboken6
+            reportlab
+            requests
+            pyqtgraph
+            onnx
+            onnxruntime
+            insightface
+            GPUtil
+            wmi
+            backend
+            frontend
+            utils
+          include-package-data: |
+            reportlab
+            pyqtgraph
+            insightface
+            onnxruntime
+          include-data-dir: |
+            frontend/assets=frontend/assets
+            ${{ steps.check_models.outputs.has_models == 'true' && 'data/models=data/models' || '' }}
+          include-data-files: |
+            app_info.json=app_info.json
+            backend/database/schema.sql=backend/database/schema.sql
+          nofollow-import-to: |
+            numpy.distutils
+            numpy.random.tests
+            numpy.random.tests.test_extending
+            onnxruntime.training
+            onnxruntime.tools
+            onnx.backend.test
+            insightface.thirdparty
+            cv2.samples
+            pyqtgraph.tests
+            PySide6.QtWebEngine
+            PySide6.QtWebEngineWidgets
+            PySide6.QtWebEngineCore
+            PySide6.Qt3DCore
+            PySide6.Qt3DRender
+            PySide6.Qt3DInput
+            PySide6.Qt3DLogic
+            PySide6.Qt3DAnimation
+            PySide6.Qt3DExtras
+            PySide6.QtCharts
+            PySide6.QtDataVisualization
+            PySide6.QtLocation
+            PySide6.QtPositioning
+            PySide6.QtRemoteObjects
+            PySide6.QtSensors
+            PySide6.QtSerialPort
+            PySide6.QtTextToSpeech
+            PySide6.QtBluetooth
+            PySide6.QtNfc
+            unittest
+            test
+            distutils
+            setuptools
+            pkg_resources
+            pip
+            doctest
+          noinclude-data-files: |
+            qt6webenginecore.dll
+            qt6webenginequick.dll
+            qt6quick.dll
+            qt6quick3d.dll
+            qt6quick3druntimerender.dll
+            qt6quick3dutils.dll
+            qt6quickcontrols2.dll
+            qt6quickshapes.dll
+            qt6quicktemplates2.dll
+            qt6quicktest.dll
+            qt6quickwidgets.dll
+            qt6qml.dll
+            qt6qmlmeta.dll
+            qt6qmlmodels.dll
+            qt6qmlworkerscript.dll
+            qt6scxml.dll
+            qt6spatialaudio.dll
+            Cython/*
+            skimage/data/*
+            insightface/thirdparty/*
+            pyqtgraph/examples/*
+          assume-yes-for-downloads: true
+
+      - name: Collect release files
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: release_files
+        shell: pwsh
+        run: |
+          $distDir = Get-ChildItem -Path (Join-Path $PWD 'build') -Directory -Filter *.dist -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $distDir) {
+            throw "Expected a *.dist folder under build/, but none was found."
+          }
+
+          $zipPath = Join-Path $PWD "build\SmartEye-${{ github.run_number }}-dist.zip"
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          Compress-Archive -Path (Join-Path $distDir.FullName '*') -DestinationPath $zipPath
+
+          $exe = Get-ChildItem -Path "$PWD\build" -Filter *.exe -File -Recurse | Select-Object -First 1
+          if (-not $exe) { throw "No .exe file found under build/." }
+
+          "exe_path=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "zip_path=$zipPath"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Create or update release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag  = "v${{ github.run_number }}"
+          $name = "SmartEye v${{ github.run_number }}"
+          $repo = "${{ github.repository }}"
+          $exe  = "${{ steps.release_files.outputs.exe_path }}"
+          $zip  = "${{ steps.release_files.outputs.zip_path }}"
+
+          gh release view $tag --repo $repo *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag $exe $zip --repo $repo --title $name --generate-notes
+          } else {
+            gh release upload $tag $exe $zip --repo $repo --clobber
+          }

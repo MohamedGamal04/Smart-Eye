@@ -1,0 +1,204 @@
+from PySide6.QtCore import QRect, Qt
+from PySide6.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPen, QPixmap
+from PySide6.QtWidgets import QLabel, QSizePolicy
+
+from frontend.styles._colors import (
+    _ACCENT_HI,
+    _BG_HEATMAP_90,
+    _BG_SURFACE,
+    _BLACK,
+    _CLASS_COLOR_1,
+    _CLASS_COLOR_2,
+    _CLASS_COLOR_3,
+    _CLASS_COLOR_4,
+    _CLASS_COLOR_5,
+    _CLASS_COLOR_6,
+    _CLASS_COLOR_7,
+    _CLASS_COLOR_8,
+    _DANGER_DIM,
+    _SUCCESS,
+    _TEXT_FAINT,
+    _TEXT_ON_ACCENT,
+    _WARNING_ORANGE,
+    _WHITE_04,
+)
+from frontend.ui_tokens import FONT_SIZE_LARGE, FONT_WEIGHT_BOLD, RADIUS_LG, SPACE_XXXS
+
+_CLASS_COLORS = [
+    _CLASS_COLOR_1,
+    _CLASS_COLOR_2,
+    _CLASS_COLOR_3,
+    _CLASS_COLOR_4,
+    _CLASS_COLOR_5,
+    _CLASS_COLOR_6,
+    _CLASS_COLOR_7,
+    _CLASS_COLOR_8,
+]
+
+
+def _class_color(text: str) -> str:
+    return _CLASS_COLORS[hash(text) % len(_CLASS_COLORS)]
+
+
+class VideoWidget(QLabel):
+    def __init__(self, camera_name: str = "", parent=None):
+        super().__init__(parent)
+        self._camera_name = camera_name
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setMinimumSize(320, 240)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setStyleSheet(f"background-color: {_BLACK}; border-radius: {RADIUS_LG}px;")
+        self._state = {}
+        self._show_overlays = True
+        self._zones = []
+        self._last_frame = None
+        self._frame_w = 1
+        self._frame_h = 1
+        self._fps = 0.0
+
+    def update_frame(self, frame, state=None):
+        if state:
+            self._state = state
+        if frame is None:
+            return
+        self._last_frame = frame
+        rgb = frame
+        if len(frame.shape) == 3 and frame.shape[2] == 3:
+            import cv2
+
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb.shape
+        self._frame_w, self._frame_h = w, h
+        qimg = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
+        pixmap = QPixmap.fromImage(qimg)
+        scaled = pixmap.scaled(
+            self.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        if self._show_overlays and self._state:
+            scaled = self._draw_overlays(scaled, w, h)
+        self.setPixmap(scaled)
+
+    def _scale_bbox(self, bbox, frame_w, frame_h, px_w, px_h):
+        sx = px_w / frame_w
+        sy = px_h / frame_h
+        x1, y1, x2, y2 = bbox
+        return (int(x1 * sx), int(y1 * sy), int(x2 * sx), int(y2 * sy))
+
+    def _draw_overlays(self, pixmap: QPixmap, frame_w: int, frame_h: int) -> QPixmap:
+        px_w, px_h = pixmap.width(), pixmap.height()
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        label_font = QFont("Segoe UI", 9, QFont.Weight.Bold)
+        painter.setFont(label_font)
+
+        def draw_box(bbox, color_hex, label_text):
+            x1, y1, x2, y2 = self._scale_bbox(bbox, frame_w, frame_h, px_w, px_h)
+            color = QColor(color_hex)
+            painter.setPen(QPen(color, 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(x1, y1, x2 - x1, y2 - y1, 4, 4)
+            if not label_text:
+                return
+            fm = painter.fontMetrics()
+            text_w = fm.horizontalAdvance(label_text) + 10
+            text_h = fm.height() + 4
+            bg_rect = QRect(x1, max(0, y1 - text_h), text_w, text_h)
+            bg_color = QColor(color_hex)
+            bg_color.setAlpha(200)
+            painter.setBrush(QBrush(bg_color))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(bg_rect, 3, 3)
+            painter.setPen(QColor(_TEXT_ON_ACCENT))
+            painter.drawText(bg_rect, Qt.AlignmentFlag.AlignCenter, label_text)
+
+        for face in self._state.get("all_faces", []):
+            identity = face.get("identity")
+            conf = face.get("confidence") or 0.0
+            liveness = face.get("liveness") or 0.0
+            if identity:
+                color = _SUCCESS if liveness >= 0.5 else _WARNING_ORANGE
+                label = f"{identity} {conf:.0%}"
+            else:
+                color = _DANGER_DIM
+                label = f"Unknown {conf:.0%}" if conf > 0.1 else "Face"
+            draw_box(face["bbox"], color, label)
+
+        if not self._state.get("all_faces") and self._state.get("face_bbox"):
+            identity = self._state.get("identity", "Unknown")
+            conf = self._state.get("face_confidence", 0.0)
+            color = _SUCCESS if identity and identity != "Unknown" else _DANGER_DIM
+            draw_box(self._state["face_bbox"], color, f"{identity or 'Unknown'} {conf:.0%}")
+
+        for obj in self._state.get("object_bboxes", []):
+            cls = obj.get("class_name", obj.get("plugin_name", "?"))
+            conf = obj.get("confidence", 0.0)
+            color = obj.get("bbox_color") or _class_color(cls)
+            draw_box(obj["bbox"], color, f"{cls} {conf:.0%}")
+
+        if self._camera_name:
+            painter.setFont(QFont("Segoe UI", 8))
+            painter.setPen(QColor(255, 255, 255, 160))
+            painter.drawText(QRect(px_w - 160, 6, 154, 18), Qt.AlignmentFlag.AlignRight, self._camera_name)
+
+        n_faces = len(self._state.get("all_faces", []))
+        n_obj = len(self._state.get("object_bboxes", []))
+        if n_faces or n_obj:
+            parts = []
+            if n_faces:
+                parts.append(f"{n_faces} face{'s' if n_faces > 1 else ''}")
+            if n_obj:
+                parts.append(f"{n_obj} obj")
+            badge_text = "  ".join(parts)
+            painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+            fm = painter.fontMetrics()
+            bw = fm.horizontalAdvance(badge_text) + 12
+            bh = fm.height() + 6
+            bg = QColor(_BG_SURFACE)
+            bg.setAlpha(200)
+            painter.setBrush(QBrush(bg))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(QRect(6, 6, bw, bh), 4, 4)
+            painter.setPen(QColor(_ACCENT_HI))
+            painter.drawText(QRect(6, 6, bw, bh), Qt.AlignmentFlag.AlignCenter, badge_text)
+
+        if self._fps > 0:
+            fps_text = f"{self._fps:.1f} fps"
+            painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+            fm = painter.fontMetrics()
+            bw = fm.horizontalAdvance(fps_text) + 10
+            bh = fm.height() + 4
+            bg2 = QColor(_BG_SURFACE)
+            bg2.setAlpha(180)
+            painter.setBrush(QBrush(bg2))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(QRect(6, px_h - bh - 6, bw, bh), 3, 3)
+            fps_color = _SUCCESS if self._fps >= 20 else (_WARNING_ORANGE if self._fps >= 10 else _DANGER_DIM)
+            painter.setPen(QColor(fps_color))
+            painter.drawText(QRect(6, px_h - bh - 6, bw, bh), Qt.AlignmentFlag.AlignCenter, fps_text)
+
+        painter.end()
+        return pixmap
+
+    def set_fps(self, fps: float):
+        self._fps = fps
+
+    def set_zones(self, zones):
+        self._zones = zones
+
+    def set_show_overlays(self, show):
+        self._show_overlays = show
+
+    def set_camera_name(self, name: str):
+        self._camera_name = name
+
+    def show_placeholder(self, text="No Signal"):
+        self.clear()
+        self.setText(text)
+        self.setStyleSheet(
+            f"background-color: {_BG_HEATMAP_90}; color: {_TEXT_FAINT}; "
+            f"font-size: {FONT_SIZE_LARGE}px; font-weight: {FONT_WEIGHT_BOLD}; border-radius: {RADIUS_LG}px; "
+            f"border: {SPACE_XXXS}px solid {_WHITE_04};"
+        )

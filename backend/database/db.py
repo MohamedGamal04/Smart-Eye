@@ -1,0 +1,1426 @@
+import contextlib
+import json
+import logging
+import os
+import hashlib
+import secrets
+import sqlite3
+import threading
+import uuid
+import queue
+from datetime import datetime
+
+
+_write_lock = threading.RLock()
+
+_DB_PATH = None
+_conn_local = threading.local()
+_CONN_TIMEOUT = 15
+_writer_thread = None
+_writer_thread_id = None
+_writer_conn = None
+_write_queue = queue.Queue()
+_writer_stop = threading.Event()
+
+
+def _apply_pragmas(conn: sqlite3.Connection) -> None:
+    with contextlib.suppress(Exception):
+        conn.execute("PRAGMA journal_mode=WAL")
+    with contextlib.suppress(Exception):
+        conn.execute("PRAGMA synchronous=NORMAL")
+    with contextlib.suppress(Exception):
+        conn.execute("PRAGMA temp_store=MEMORY")
+    with contextlib.suppress(Exception):
+        conn.execute("PRAGMA cache_size=2000")
+    with contextlib.suppress(Exception):
+        conn.execute("PRAGMA foreign_keys=ON")
+
+
+def _create_conn() -> sqlite3.Connection:
+    if not _DB_PATH:
+        raise RuntimeError("Database not initialized")
+    conn = sqlite3.connect(_DB_PATH, check_same_thread=False, timeout=_CONN_TIMEOUT)
+    conn.row_factory = sqlite3.Row
+    _apply_pragmas(conn)
+    return conn
+
+
+def _writer_loop():
+    global _writer_conn, _writer_thread_id
+    _writer_thread_id = threading.get_ident()
+    _writer_conn = _create_conn()
+    while not _writer_stop.is_set():
+        try:
+            item = _write_queue.get(timeout=0.2)
+        except queue.Empty:
+            continue
+        if item is None:
+            break
+        kind = item[0]
+        result_q = item[-1]
+        try:
+            if kind == "SQL":
+                _, sql, params, commit, result_q = item
+                cur = _writer_conn.execute(sql, params)
+                if commit:
+                    _writer_conn.commit()
+                result_q.put((cur, None))
+            elif kind == "CALL":
+                _, fn, result_q = item
+                res = fn(_writer_conn)
+                result_q.put((res, None))
+        except Exception as e:
+            try:
+                _writer_conn.rollback()
+            except Exception:
+                pass
+            result_q.put((None, e))
+        finally:
+            _write_queue.task_done()
+    try:
+        if _writer_conn:
+            _writer_conn.close()
+    except Exception:
+        pass
+
+
+def _ensure_writer():
+    global _writer_thread
+    if _writer_thread and _writer_thread.is_alive():
+        return
+    _writer_stop.clear()
+    _writer_thread = threading.Thread(target=_writer_loop, name="db-writer", daemon=True)
+    _writer_thread.start()
+
+
+class _ConnProxy:
+    def _get(self) -> sqlite3.Connection:
+        conn = getattr(_conn_local, "conn", None)
+        if conn is None:
+            conn = _create_conn()
+            _conn_local.conn = conn
+        return conn
+
+    def __getattr__(self, name):
+        return getattr(self._get(), name)
+
+    def __setattr__(self, name, value):
+        setattr(self._get(), name, value)
+
+
+_conn = _ConnProxy()
+_DEFAULT_ALLOWED_TABS = [
+    "analytics",
+    "dashboard",
+    "detectors",
+    "faces",
+    "logs",
+    "models",
+    "notifications",
+    "playback",
+    "rules",
+    "settings",
+]
+_DEFAULT_ADMIN_EMAIL = "admin@smarteye.local"
+_SEC_QUESTIONS_DEFAULT = (
+    "What is your favorite color?",
+    "What city were you born in?",
+    "What is your pet name?",
+)
+
+
+def init(db_path):
+    global _DB_PATH
+    _DB_PATH = db_path
+    conn = _create_conn()
+    _conn_local.conn = conn
+    _ensure_writer()
+
+    schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
+    try:
+        with open(schema_path) as f:
+            schema_sql = f.read()
+        conn.executescript(schema_sql)
+        conn.commit()
+    except Exception as e:
+        logging.getLogger(__name__).exception("Failed to apply initial schema: %s", e)
+
+    try:
+        from backend.database import migrations
+
+        try:
+            migrations.apply(conn)
+        except Exception:
+            logging.getLogger(__name__).exception("Failed to apply migrations")
+    except Exception:
+        pass
+
+    try:
+        tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+        if "cameras" not in tables:
+            logging.getLogger(__name__).warning("Essential table 'cameras' missing — attempting to reapply schema.sql")
+            try:
+                with open(schema_path) as f:
+                    conn.executescript(f.read())
+                conn.commit()
+            except Exception:
+                logging.getLogger(__name__).exception("Reapplying schema failed")
+    except Exception:
+        logging.getLogger(__name__).exception("Failed to verify database tables")
+
+
+def get_conn():
+    return _conn._get()
+
+
+def close():
+    conn = getattr(_conn_local, "conn", None)
+    if conn:
+        conn.close()
+        _conn_local.conn = None
+    _writer_stop.set()
+    try:
+        _write_queue.put_nowait(None)
+    except Exception:
+        pass
+    try:
+        if _writer_thread and _writer_thread.is_alive():
+            _writer_thread.join(timeout=2.0)
+    except Exception:
+        pass
+
+
+def _normalize_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+
+def _normalize_tabs(tabs):
+    if not tabs:
+        return []
+    uniq = []
+    for t in tabs:
+        if t and t not in uniq:
+            uniq.append(t)
+    return uniq
+
+
+def _build_update(allowed: set[str], kwargs: dict) -> tuple[str | None, list | None]:
+    if not kwargs:
+        return None, None
+    safe = {k: v for k, v in kwargs.items() if k in allowed}
+    unknown = [k for k in kwargs.keys() if k not in allowed]
+    if unknown:
+        logging.getLogger(__name__).warning("Ignoring unknown update fields: %s", unknown)
+    if not safe:
+        return None, None
+    sets = ", ".join(f"{k}=?" for k in safe.keys())
+    vals = list(safe.values())
+    return sets, vals
+
+
+def _write_execute(sql: str, params=(), commit: bool = True):
+    _ensure_writer()
+    if threading.get_ident() == _writer_thread_id and _writer_conn is not None:
+        cur = _writer_conn.execute(sql, params)
+        if commit:
+            _writer_conn.commit()
+        return cur
+    result_q = queue.Queue(maxsize=1)
+    _write_queue.put(("SQL", sql, params, commit, result_q))
+    cur, err = result_q.get()
+    if err:
+        raise err
+    return cur
+
+
+def _write_call(fn):
+    _ensure_writer()
+    if threading.get_ident() == _writer_thread_id and _writer_conn is not None:
+        return fn(_writer_conn)
+    result_q = queue.Queue(maxsize=1)
+    _write_queue.put(("CALL", fn, result_q))
+    res, err = result_q.get()
+    if err:
+        raise err
+    return res
+
+
+def _hash_password(password: str, salt: str | None = None):
+    salt_val = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt_val), 120000)
+    return salt_val, digest.hex()
+
+
+def _hash_answer(answer: str, salt: str):
+    digest = hashlib.pbkdf2_hmac("sha256", answer.strip().lower().encode("utf-8"), bytes.fromhex(salt), 80000)
+    return digest.hex()
+
+
+def _generate_bootstrap_password() -> str:
+    return secrets.token_urlsafe(12)
+
+
+def _store_bootstrap_token(token: str) -> None:
+    try:
+        set_setting("bootstrap_password_active", "1")
+        set_setting("bootstrap_token", token)
+    except Exception:
+        pass
+
+
+def _clear_bootstrap_token() -> None:
+    try:
+        set_setting("bootstrap_password_active", "0")
+        set_setting("bootstrap_token", "")
+    except Exception:
+        pass
+
+
+def _row_to_account(row):
+    allowed = []
+    try:
+        allowed = json.loads(row["allowed_tabs"]) if row["allowed_tabs"] else []
+    except Exception:
+        allowed = []
+    return {
+        "id": row["id"],
+        "email": row["email"],
+        "allowed_tabs": allowed,
+        "is_admin": bool(row["is_admin"]),
+        "created_at": row["created_at"],
+        "last_login": row["last_login"],
+        "sec_q1": row["sec_q1"] if "sec_q1" in row.keys() else None,
+        "sec_q2": row["sec_q2"] if "sec_q2" in row.keys() else None,
+        "sec_q3": row["sec_q3"] if "sec_q3" in row.keys() else None,
+        "avatar_path": row["avatar_path"] if "avatar_path" in row.keys() else "",
+    }
+
+
+def ensure_default_account():
+    tables = [r[0] for r in _conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+    if "accounts" not in tables:
+        return
+    row = _conn.execute("SELECT COUNT(*) FROM accounts").fetchone()
+    if not row or row[0] > 0:
+        return
+    try:
+        bootstrap_password = _generate_bootstrap_password()
+        _store_bootstrap_token(bootstrap_password)
+        logging.getLogger(__name__).warning(
+            "Bootstrap admin password generated. Change it after first login: %s",
+            bootstrap_password,
+        )
+        create_account(
+            _DEFAULT_ADMIN_EMAIL,
+            bootstrap_password,
+            allowed_tabs=_DEFAULT_ALLOWED_TABS,
+            is_admin=True,
+            security=(list(_SEC_QUESTIONS_DEFAULT), ["", "", ""]),
+        )
+    except Exception:
+        pass
+
+
+def create_account(email: str, password: str, allowed_tabs=None, is_admin: bool = False, security=None, avatar_path: str = ""):
+    sec_questions, sec_answers = security or ([], [])
+    salt, pw_hash = _hash_password(password)
+    sec_salt = secrets.token_hex(16)
+    hashes = []
+    for ans in sec_answers or []:
+        hashes.append(_hash_answer(ans or "", sec_salt))
+    while len(hashes) < 3:
+        hashes.append("")
+    qs = list(sec_questions or [])
+    while len(qs) < 3:
+        qs.append("")
+    tabs = json.dumps(_normalize_tabs(allowed_tabs or []))
+    cur = _write_execute(
+        """INSERT INTO accounts
+        (email, password_hash, salt, allowed_tabs, is_admin,
+         sec_q1, sec_q2, sec_q3, sec_a1_hash, sec_a2_hash, sec_a3_hash, sec_salt, avatar_path)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            _normalize_email(email),
+            pw_hash,
+            salt,
+            tabs,
+            1 if is_admin else 0,
+            qs[0],
+            qs[1],
+            qs[2],
+            hashes[0],
+            hashes[1],
+            hashes[2],
+            sec_salt,
+            avatar_path or "",
+        ),
+    )
+    return cur.lastrowid
+
+
+def update_account(account_id: int, *, email=None, password=None, allowed_tabs=None, is_admin=None, security=None, avatar_path=None):
+    sets = []
+    vals = []
+    password_updated = False
+    if email is not None:
+        sets.append("email=?")
+        vals.append(_normalize_email(email))
+    if password is not None:
+        salt, pw_hash = _hash_password(password)
+        sets.append("password_hash=?")
+        sets.append("salt=?")
+        vals.append(pw_hash)
+        vals.append(salt)
+        password_updated = True
+    if security is not None:
+        sec_questions, sec_answers = security
+        sec_salt = secrets.token_hex(16)
+        qs = list(sec_questions or [])
+        while len(qs) < 3:
+            qs.append("")
+        hashes = []
+        for ans in sec_answers or []:
+            hashes.append(_hash_answer(ans or "", sec_salt))
+        while len(hashes) < 3:
+            hashes.append("")
+        sets.extend(["sec_q1=?", "sec_q2=?", "sec_q3=?", "sec_a1_hash=?", "sec_a2_hash=?", "sec_a3_hash=?", "sec_salt=?"])
+        vals.extend([qs[0], qs[1], qs[2], hashes[0], hashes[1], hashes[2], sec_salt])
+    if allowed_tabs is not None:
+        sets.append("allowed_tabs=?")
+        vals.append(json.dumps(_normalize_tabs(allowed_tabs)))
+    if is_admin is not None:
+        sets.append("is_admin=?")
+        vals.append(1 if is_admin else 0)
+    if avatar_path is not None:
+        sets.append("avatar_path=?")
+        vals.append(avatar_path)
+    if not sets:
+        return
+    vals.append(account_id)
+    _write_execute(f"UPDATE accounts SET {', '.join(sets)} WHERE id=?", vals)
+    if password_updated and get_bool("bootstrap_password_active", False):
+        _clear_bootstrap_token()
+
+
+def delete_account(account_id: int):
+    _write_execute("DELETE FROM accounts WHERE id=?", (account_id,))
+
+
+def get_accounts():
+    rows = _conn.execute("SELECT * FROM accounts ORDER BY email").fetchall()
+    return [_row_to_account(r) for r in rows]
+
+
+def get_account(account_id: int):
+    row = _conn.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
+    return _row_to_account(row) if row else None
+
+
+def get_account_by_email(email: str):
+    row = _conn.execute("SELECT * FROM accounts WHERE email=?", (_normalize_email(email),)).fetchone()
+    return row
+
+
+def verify_credentials(email: str, password: str):
+    row = _conn.execute("SELECT * FROM accounts WHERE email=?", (_normalize_email(email),)).fetchone()
+    if not row:
+        return None
+    salt = row["salt"]
+    _, pw_hash = _hash_password(password, salt)
+    if pw_hash != row["password_hash"]:
+        return None
+    return _row_to_account(row)
+
+
+def verify_security_answers(email: str, answers: list[str]):
+    row = get_account_by_email(email)
+    if not row:
+        return None
+    salt = row["sec_salt"]
+    if not salt:
+        return None
+    if not answers or len(answers) < 3:
+        return None
+    if any(not (a or "").strip() for a in answers[:3]):
+        return None
+    hashes = []
+    for ans in answers[:3]:
+        hashes.append(_hash_answer(ans or "", salt))
+    stored = [row["sec_a1_hash"], row["sec_a2_hash"], row["sec_a3_hash"]]
+    if all(h1 == h2 for h1, h2 in zip(hashes, stored)):
+        return _row_to_account(row)
+    return None
+
+
+def set_password(account_id: int, new_password: str):
+    salt, pw_hash = _hash_password(new_password)
+    _write_execute("UPDATE accounts SET password_hash=?, salt=? WHERE id=?", (pw_hash, salt, account_id))
+
+
+def touch_last_login(account_id: int):
+    try:
+        now = datetime.utcnow().isoformat()
+    except Exception:
+        now = None
+    _write_execute("UPDATE accounts SET last_login=? WHERE id=?", (now, account_id))
+
+
+def add_camera(name, source, location="", resolution="1280x720", fps_limit=30, face_recognition=1, enabled=1):
+    cur = _write_execute(
+        "INSERT INTO cameras (name, source, enabled, location, resolution, fps_limit, face_recognition) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            name,
+            source,
+            1 if enabled in (1, True, "1", "true") else 0,
+            location,
+            resolution,
+            fps_limit,
+            1 if face_recognition in (1, True, "1", "true") else 0,
+        ),
+    )
+    return cur.lastrowid
+
+
+def update_camera(cam_id, **kwargs):
+    allowed = {
+        "name",
+        "source",
+        "enabled",
+        "location",
+        "resolution",
+        "fps_limit",
+        "face_recognition",
+        "face_similarity_threshold",
+    }
+    sets, vals = _build_update(allowed, kwargs)
+    if not sets:
+        return
+    vals.append(cam_id)
+    _write_execute(f"UPDATE cameras SET {sets} WHERE id=?", vals)
+
+
+def delete_camera(cam_id):
+    def _op(conn):
+        cur = conn.cursor()
+        try:
+            cur.execute("DELETE FROM detection_logs WHERE camera_id=?", (cam_id,))
+            cur.execute("DELETE FROM access_log WHERE camera_id=?", (cam_id,))
+            cur.execute("UPDATE rules SET camera_id=NULL WHERE camera_id=?", (cam_id,))
+            cur.execute("DELETE FROM camera_plugins WHERE camera_id=?", (cam_id,))
+            cur.execute("DELETE FROM zones WHERE camera_id=?", (cam_id,))
+            cur.execute("DELETE FROM cameras WHERE id=?", (cam_id,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    _write_call(_op)
+
+
+def get_cameras(enabled_only=False):
+    q = "SELECT * FROM cameras"
+    if enabled_only:
+        q += " WHERE enabled=1"
+    return [dict(r) for r in _conn.execute(q).fetchall()]
+
+
+def get_camera(cam_id):
+    row = _conn.execute("SELECT * FROM cameras WHERE id=?", (cam_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_camera_face_threshold(camera_id):
+    cam = get_camera(camera_id)
+    if not cam:
+        return None
+    val = cam.get("face_similarity_threshold")
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except Exception:
+        return None
+
+
+def get_zones(camera_id=None, enabled_only=False):
+    q = "SELECT * FROM zones WHERE 1=1"
+    params = []
+    if camera_id is not None:
+        q += " AND camera_id=?"
+        params.append(camera_id)
+    if enabled_only:
+        q += " AND enabled=1"
+    return [dict(r) for r in _conn.execute(q, params).fetchall()]
+
+
+def add_plugin(name, model_type, weight_path, confidence=0.6, description="", version="1.0"):
+    cur = _write_execute(
+        "INSERT INTO model_plugins (name, model_type, weight_path, confidence, description, version) VALUES (?, ?, ?, ?, ?, ?)",
+        (name, model_type, weight_path, confidence, description, version),
+    )
+    return cur.lastrowid
+
+
+def update_plugin(plugin_id, **kwargs):
+    allowed = {
+        "name",
+        "model_type",
+        "weight_path",
+        "enabled",
+        "confidence",
+        "description",
+        "version",
+        "preferred_provider",
+        "last_error",
+        "last_error_at",
+        "last_provider",
+    }
+    sets, vals = _build_update(allowed, kwargs)
+    if not sets:
+        return
+    vals.append(plugin_id)
+    _write_execute(f"UPDATE model_plugins SET {sets} WHERE id=?", vals)
+
+
+def set_plugin_error(plugin_id, message):
+    try:
+        now = datetime.utcnow().isoformat()
+    except Exception:
+        now = None
+    update_plugin(plugin_id, last_error=message, last_error_at=now)
+
+
+def clear_plugin_error(plugin_id, *, preferred_provider=None, last_provider=None):
+    payload = {"last_error": None, "last_error_at": None}
+    if preferred_provider is not None:
+        payload["preferred_provider"] = preferred_provider
+    if last_provider is not None:
+        payload["last_provider"] = last_provider
+    update_plugin(plugin_id, **payload)
+
+
+def delete_plugin(plugin_id):
+    _write_execute("DELETE FROM model_plugins WHERE id=?", (plugin_id,))
+
+
+def get_plugins(enabled_only=False):
+    q = "SELECT * FROM model_plugins"
+    if enabled_only:
+        q += " WHERE enabled=1"
+    return [dict(r) for r in _conn.execute(q).fetchall()]
+
+
+def get_plugin(plugin_id):
+    row = _conn.execute("SELECT * FROM model_plugins WHERE id=?", (plugin_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def add_plugin_class(plugin_id, class_index, class_name, display_name, value_type="boolean", confidence=0.5):
+    cur = _write_execute(
+        "INSERT INTO plugin_classes (plugin_id, class_index, class_name, display_name, value_type, confidence) VALUES (?, ?, ?, ?, ?, ?)",
+        (plugin_id, class_index, class_name, display_name, value_type, confidence),
+    )
+    try:
+        from backend.pipeline import analyzer
+
+        analyzer.invalidate_cache()
+    except Exception:
+        pass
+    return cur.lastrowid
+
+
+def set_class_color(class_id: int, color: str) -> None:
+    _write_execute("UPDATE plugin_classes SET color=? WHERE id=?", (color, class_id))
+    try:
+        from backend.pipeline import analyzer
+
+        analyzer.invalidate_cache()
+    except Exception:
+        pass
+
+
+def update_plugin_class(cls_id, **kwargs):
+    allowed = {
+        "plugin_id",
+        "class_index",
+        "class_name",
+        "display_name",
+        "value_type",
+        "enabled",
+        "confidence",
+        "color",
+    }
+    sets, vals = _build_update(allowed, kwargs)
+    if not sets:
+        return
+    vals.append(cls_id)
+    _write_execute(f"UPDATE plugin_classes SET {sets} WHERE id=?", vals)
+    try:
+        from backend.pipeline import analyzer
+
+        analyzer.invalidate_cache()
+    except Exception:
+        pass
+
+
+def get_plugin_classes(plugin_id=None, enabled_only=False):
+    q = "SELECT * FROM plugin_classes WHERE 1=1"
+    params = []
+    if plugin_id is not None:
+        q += " AND plugin_id=?"
+        params.append(plugin_id)
+    if enabled_only:
+        q += " AND enabled=1"
+    return [dict(r) for r in _conn.execute(q, params).fetchall()]
+
+
+def assign_plugin_to_camera(camera_id, plugin_id):
+    _write_execute(
+        "INSERT OR IGNORE INTO camera_plugins (camera_id, plugin_id) VALUES (?, ?)",
+        (camera_id, plugin_id),
+    )
+
+
+def unassign_plugin_from_camera(camera_id, plugin_id):
+    _write_execute(
+        "DELETE FROM camera_plugins WHERE camera_id=? AND plugin_id=?",
+        (camera_id, plugin_id),
+    )
+
+
+def get_camera_plugins(camera_id):
+    rows = _conn.execute(
+        "SELECT mp.* FROM model_plugins mp JOIN camera_plugins cp ON mp.id=cp.plugin_id WHERE cp.camera_id=? AND mp.enabled=1",
+        (camera_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_plugin_cameras(plugin_id):
+    rows = _conn.execute(
+        "SELECT c.* FROM cameras c JOIN camera_plugins cp ON c.id=cp.camera_id WHERE cp.plugin_id=?",
+        (plugin_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def assign_camera_plugin_class(camera_id, plugin_class_id, enabled=1, confidence=None):
+
+    try:
+        _conn.execute(
+            "INSERT INTO camera_plugin_classes (camera_id, plugin_class_id, enabled, confidence) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(camera_id, plugin_class_id) DO UPDATE SET enabled=excluded.enabled, confidence=excluded.confidence",
+            (camera_id, plugin_class_id, 1 if enabled in (1, True, "1", "true") else 0, confidence),
+        )
+        _conn.commit()
+    except Exception:
+        cur = _conn.execute(
+            "UPDATE camera_plugin_classes SET enabled=?, confidence=? WHERE camera_id=? AND plugin_class_id=?",
+            (1 if enabled in (1, True, "1", "true") else 0, confidence, camera_id, plugin_class_id),
+        )
+        if cur.rowcount == 0:
+            _conn.execute(
+                "INSERT OR IGNORE INTO camera_plugin_classes (camera_id, plugin_class_id, enabled, confidence) VALUES (?, ?, ?, ?)",
+                (camera_id, plugin_class_id, 1 if enabled in (1, True, "1", "true") else 0, confidence),
+            )
+            _conn.commit()
+
+
+def get_camera_plugin_classes(camera_id, plugin_id):
+
+    q = """
+        SELECT cpc.*, pc.class_index, pc.class_name, pc.id as plugin_class_id
+        FROM camera_plugin_classes cpc
+        JOIN plugin_classes pc ON cpc.plugin_class_id = pc.id
+        WHERE cpc.camera_id = ? AND pc.plugin_id = ?
+    """
+    rows = _conn.execute(q, (camera_id, plugin_id)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def remove_camera_plugin_class(camera_id, plugin_class_id):
+    _write_execute(
+        "DELETE FROM camera_plugin_classes WHERE camera_id=? AND plugin_class_id=?",
+        (camera_id, plugin_class_id),
+    )
+
+
+def add_rule(name, description, logic, action, priority=0, camera_id=None, zone_id=None):
+    cur = _write_execute(
+        "INSERT INTO rules (name, description, logic, action, priority, camera_id, zone_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (name, description, logic, action, priority, camera_id, zone_id),
+    )
+    try:
+        from backend.pipeline import rule_engine
+
+        rule_engine.invalidate_rule_cache()
+    except Exception:
+        pass
+    return cur.lastrowid
+
+
+def update_rule(rule_id, **kwargs):
+    allowed = {
+        "name",
+        "description",
+        "logic",
+        "action",
+        "enabled",
+        "priority",
+        "camera_id",
+        "zone_id",
+    }
+    sets, vals = _build_update(allowed, kwargs)
+    if not sets:
+        return
+    vals.append(rule_id)
+    _write_execute(f"UPDATE rules SET {sets} WHERE id=?", vals)
+    try:
+        from backend.pipeline import rule_engine
+
+        rule_engine.invalidate_rule_cache()
+    except Exception:
+        pass
+
+
+def delete_rule(rule_id):
+    _write_execute("DELETE FROM rules WHERE id=?", (rule_id,))
+    try:
+        from backend.pipeline import rule_engine
+
+        rule_engine.invalidate_rule_cache()
+    except Exception:
+        pass
+
+
+def get_rules(enabled_only=False, camera_id=None):
+    q = "SELECT * FROM rules WHERE 1=1"
+    params = []
+    if enabled_only:
+        q += " AND enabled=1"
+    if camera_id is not None:
+        q += " AND (camera_id IS NULL OR camera_id=?)"
+        params.append(camera_id)
+    q += " ORDER BY priority DESC"
+    return [dict(r) for r in _conn.execute(q, params).fetchall()]
+
+
+def get_rule(rule_id):
+    row = _conn.execute("SELECT * FROM rules WHERE id=?", (rule_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def add_rule_condition(rule_id, attribute, operator, value):
+    cur = _write_execute(
+        "INSERT INTO rule_conditions (rule_id, attribute, operator, value) VALUES (?, ?, ?, ?)",
+        (rule_id, attribute, operator, value),
+    )
+    try:
+        from backend.pipeline import rule_engine
+
+        rule_engine.invalidate_rule_cache()
+    except Exception:
+        pass
+    return cur.lastrowid
+
+
+def delete_rule_conditions(rule_id):
+    _write_execute("DELETE FROM rule_conditions WHERE rule_id=?", (rule_id,))
+    try:
+        from backend.pipeline import rule_engine
+
+        rule_engine.invalidate_rule_cache()
+    except Exception:
+        pass
+
+
+def get_rule_conditions(rule_id):
+    return [dict(r) for r in _conn.execute("SELECT * FROM rule_conditions WHERE rule_id=?", (rule_id,)).fetchall()]
+
+
+def add_alarm_action(rule_id, escalation_level, trigger_after_sec, action_type, action_value="", cooldown_sec=10):
+    cur = _write_execute(
+        "INSERT INTO alarm_actions (rule_id, escalation_level, trigger_after_sec, action_type, action_value, cooldown_sec) VALUES (?, ?, ?, ?, ?, ?)",
+        (rule_id, escalation_level, trigger_after_sec, action_type, action_value, cooldown_sec),
+    )
+    return cur.lastrowid
+
+
+def delete_alarm_actions(rule_id):
+    _write_execute("DELETE FROM alarm_actions WHERE rule_id=?", (rule_id,))
+
+
+def get_alarm_actions(rule_id=None, escalation_level=None):
+    q = "SELECT * FROM alarm_actions WHERE 1=1"
+    params = []
+    if rule_id is not None:
+        q += " AND rule_id=?"
+        params.append(rule_id)
+    if escalation_level is not None:
+        q += " AND escalation_level<=?"
+        params.append(escalation_level)
+    q += " ORDER BY escalation_level"
+    return [dict(r) for r in _conn.execute(q, params).fetchall()]
+
+
+def add_known_face(
+    name,
+    role,
+    department,
+    embedding_bytes,
+    image_path="",
+    authorized_cameras="[]",
+    liveness_required=0,
+    external_uuid=None,
+    address="",
+    country="",
+    birth_date="",
+    phone="",
+    email="",
+    embedding_model="",
+):
+
+    try:
+        emb_param = embedding_bytes
+        if emb_param is None:
+            raise ValueError("embedding_bytes is None")
+
+        try:
+            import numpy as _np
+
+            if isinstance(emb_param, _np.ndarray):
+                emb_param = emb_param.astype(_np.float32).tobytes()
+        except Exception:
+            pass
+        if isinstance(emb_param, memoryview):
+            emb_param = bytes(emb_param)
+        if isinstance(emb_param, bytearray):
+            emb_param = bytes(emb_param)
+
+        emb_param = sqlite3.Binary(emb_param)
+    except Exception as e:
+        raise ValueError(f"Invalid embedding_bytes for known face: {e}") from e
+
+    row_uuid = external_uuid or str(uuid.uuid4())
+    cur = _write_execute(
+        """INSERT INTO known_faces
+           (uuid, name, role, department, address, country, birth_date, phone, email, embedding, image_path, authorized_cameras, liveness_required, embedding_model)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            row_uuid,
+            name,
+            role,
+            department,
+            address,
+            country,
+            birth_date,
+            phone,
+            email,
+            emb_param,
+            image_path,
+            authorized_cameras,
+            liveness_required,
+            embedding_model or "",
+        ),
+    )
+    return cur.lastrowid
+
+
+def add_face_inbox(temp_name, camera_id, embedding_bytes, image_path="", embedding_model=""):
+    emb_param = None
+    try:
+        emb_param = embedding_bytes
+        if emb_param is not None:
+            import numpy as _np
+
+            if isinstance(emb_param, _np.ndarray):
+                emb_param = emb_param.astype(_np.float32).tobytes()
+        if isinstance(emb_param, memoryview):
+            emb_param = bytes(emb_param)
+        if isinstance(emb_param, bytearray):
+            emb_param = bytes(emb_param)
+        if emb_param is not None:
+            emb_param = sqlite3.Binary(emb_param)
+    except Exception:
+        emb_param = None
+    cur = _write_execute(
+        """INSERT INTO face_inbox (temp_name, camera_id, image_path, embedding, embedding_model)
+           VALUES (?, ?, ?, ?, ?)""",
+        (temp_name, camera_id, image_path, emb_param, embedding_model or ""),
+    )
+    return cur.lastrowid
+
+
+def get_face_inbox():
+    rows = _conn.execute("SELECT * FROM face_inbox ORDER BY added_at DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_face_inbox(entry_id: int):
+    _write_execute("DELETE FROM face_inbox WHERE id=?", (entry_id,))
+
+
+def update_known_face(face_id, **kwargs):
+    if not kwargs:
+        return
+    allowed = {
+        "uuid",
+        "name",
+        "role",
+        "department",
+        "address",
+        "country",
+        "birth_date",
+        "phone",
+        "email",
+        "embedding",
+        "image_path",
+        "authorized_cameras",
+        "liveness_required",
+        "embedding_model",
+        "enabled",
+    }
+    sets, vals = _build_update(allowed, kwargs)
+    if not sets:
+        return
+    vals.append(face_id)
+    _write_execute(f"UPDATE known_faces SET {sets} WHERE id=?", vals)
+
+
+def delete_known_face(face_id):
+    def _op(conn):
+        conn.execute("DELETE FROM access_log WHERE face_id=?", (face_id,))
+        conn.execute("DELETE FROM known_faces WHERE id=?", (face_id,))
+        conn.commit()
+
+    _write_call(_op)
+
+
+def get_known_faces(enabled_only=False):
+    q = "SELECT * FROM known_faces"
+    if enabled_only:
+        q += " WHERE enabled=1"
+    return [dict(r) for r in _conn.execute(q).fetchall()]
+
+
+def get_known_face(face_id):
+    row = _conn.execute("SELECT * FROM known_faces WHERE id=?", (face_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def add_access_log(face_id, camera_id, decision, reason=""):
+    cur = _write_execute(
+        "INSERT INTO access_log (face_id, camera_id, decision, reason) VALUES (?, ?, ?, ?)",
+        (face_id, camera_id, decision, reason),
+    )
+    return cur.lastrowid
+
+
+def add_detection_log(camera_id, zone_id, identity, face_confidence, detections, rules_triggered, alarm_level, snapshot_path=""):
+    det_json = json.dumps(detections) if isinstance(detections, dict) else detections
+    rules_json = json.dumps(rules_triggered) if isinstance(rules_triggered, list) else rules_triggered
+    cur = _write_execute(
+        "INSERT INTO detection_logs (camera_id, zone_id, identity, face_confidence, detections, rules_triggered, alarm_level, snapshot_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (camera_id, zone_id, identity, face_confidence, det_json, rules_json, alarm_level, snapshot_path),
+    )
+    return cur.lastrowid
+
+
+def get_detection_logs(
+    camera_id=None, date_from=None, date_to=None, identity=None, rule_name=None, alarm_level=None, reviewed=None, limit=500
+):
+    q = """SELECT dl.*, c.name as camera_name
+           FROM detection_logs dl
+           LEFT JOIN cameras c ON dl.camera_id=c.id
+           WHERE 1=1"""
+    params = []
+    if camera_id is not None:
+        q += " AND dl.camera_id=?"
+        params.append(camera_id)
+    if date_from:
+        q += " AND dl.timestamp>=?"
+        params.append(date_from)
+    if date_to:
+        q += " AND dl.timestamp<=?"
+        params.append(date_to)
+    if identity:
+        q += " AND dl.identity LIKE ?"
+        params.append(f"%{identity}%")
+    if rule_name:
+        q += " AND dl.rules_triggered LIKE ?"
+        params.append(f"%{rule_name}%")
+    if alarm_level is not None:
+        q += " AND dl.alarm_level>=?"
+        params.append(alarm_level)
+    if reviewed is not None:
+        q += " AND dl.reviewed=?"
+        params.append(reviewed)
+    q += " ORDER BY dl.timestamp DESC LIMIT ?"
+    params.append(limit)
+    return [dict(r) for r in _conn.execute(q, params).fetchall()]
+
+
+def add_notification_profile(name, ntype, endpoint, auth_token=""):
+    cur = _write_execute(
+        "INSERT INTO notification_profiles (name, type, endpoint, auth_token) VALUES (?, ?, ?, ?)",
+        (name, ntype, endpoint, auth_token),
+    )
+    return cur.lastrowid
+
+
+def update_notification_profile(profile_id, **kwargs):
+    allowed = {
+        "name",
+        "type",
+        "endpoint",
+        "enabled",
+        "auth_token",
+    }
+    sets, vals = _build_update(allowed, kwargs)
+    if not sets:
+        return
+    vals.append(profile_id)
+    _write_execute(f"UPDATE notification_profiles SET {sets} WHERE id=?", vals)
+
+
+def delete_notification_profile(profile_id):
+    _write_execute("DELETE FROM notification_profiles WHERE id=?", (profile_id,))
+
+
+def get_notification_profiles(enabled_only=False, ntype=None):
+    q = "SELECT * FROM notification_profiles WHERE 1=1"
+    params = []
+    if enabled_only:
+        q += " AND enabled=1"
+    if ntype:
+        q += " AND type=?"
+        params.append(ntype)
+    return [dict(r) for r in _conn.execute(q, params).fetchall()]
+
+
+def get_setting(key, default=None):
+    row = _conn.execute("SELECT value, type FROM app_settings WHERE key=?", (key,)).fetchone()
+    if not row:
+        return default
+    val, vtype = row["value"], row["type"]
+    if vtype == "int":
+        return int(val) if val else default
+    if vtype == "float":
+        return float(val) if val else default
+    if vtype == "bool":
+        return val == "1"
+    if vtype == "json":
+        return json.loads(val) if val else default
+    return val
+
+
+_TRUE_SET = {"1", "true", "yes", "on"}
+_FALSE_SET = {"0", "false", "no", "off", ""}
+
+
+def _as_bool(val, default=False):
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return val != 0
+    try:
+        s = str(val).strip().lower()
+    except Exception:
+        return default
+    if s in _TRUE_SET:
+        return True
+    if s in _FALSE_SET:
+        return False
+    return default
+
+
+def get_bool(key: str, default: bool = False) -> bool:
+    try:
+        return _as_bool(get_setting(key, None), default)
+    except Exception:
+        return default
+
+
+def get_int(key: str, default: int | None = None) -> int | None:
+    try:
+        val = get_setting(key, None)
+        return int(val)
+    except Exception:
+        return default
+
+
+def get_float(key: str, default: float | None = None) -> float | None:
+    try:
+        val = get_setting(key, None)
+        return float(val)
+    except Exception:
+        return default
+
+
+def set_setting(key, value):
+    def _op(conn):
+        row = conn.execute("SELECT type FROM app_settings WHERE key=?", (key,)).fetchone()
+        if row:
+            vtype = row["type"]
+            if vtype == "bool":
+                v = "1" if value in (True, 1, "1", "true", "yes") else "0"
+            elif vtype == "json":
+                v = json.dumps(value)
+            else:
+                v = str(value)
+            conn.execute("UPDATE app_settings SET value=? WHERE key=?", (v, key))
+        else:
+            conn.execute(
+                "INSERT INTO app_settings (key, value) VALUES (?, ?)",
+                (key, str(value)),
+            )
+        conn.commit()
+
+    _write_call(_op)
+
+
+def get_all_settings(section=None):
+    q = "SELECT * FROM app_settings"
+    params = []
+    if section:
+        q += " WHERE section=?"
+        params.append(section)
+    q += " ORDER BY section, key"
+    return [dict(r) for r in _conn.execute(q, params).fetchall()]
+
+
+def get_settings_sections():
+    rows = _conn.execute("SELECT DISTINCT section FROM app_settings WHERE section IS NOT NULL ORDER BY section").fetchall()
+    return [r["section"] for r in rows]
+
+
+def export_settings_json():
+    settings = get_all_settings()
+    return {s["key"]: {"value": s["value"], "type": s["type"], "label": s["label"], "section": s["section"]} for s in settings}
+
+
+def import_settings_json(data):
+    def _op(conn):
+        for key, info in data.items():
+            conn.execute(
+                "INSERT OR REPLACE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+                (key, info.get("value", ""), info.get("type", "string"), info.get("label", ""), info.get("section", "")),
+            )
+        conn.commit()
+
+    _write_call(_op)
+
+
+def vacuum():
+    def _op(conn):
+        conn.execute("VACUUM")
+
+    _write_call(_op)
+
+
+def backup(dest_path):
+    def _op(conn):
+        backup_conn = sqlite3.connect(dest_path)
+        try:
+            conn.backup(backup_conn)
+        finally:
+            backup_conn.close()
+
+    _write_call(_op)
+
+
+def get_detection_stats(date_from=None, date_to=None, camera_id=None):
+    q = "SELECT COUNT(*) as total, SUM(CASE WHEN alarm_level>0 THEN 1 ELSE 0 END) as violations FROM detection_logs WHERE 1=1"
+    params = []
+    if date_from:
+        q += " AND timestamp>=?"
+        params.append(date_from)
+    if date_to:
+        q += " AND timestamp<=?"
+        params.append(date_to)
+    if camera_id:
+        q += " AND camera_id=?"
+        params.append(camera_id)
+    row = _conn.execute(q, params).fetchone()
+    return dict(row)
+
+
+def get_hourly_violations(date_from=None, date_to=None):
+    q = "SELECT strftime('%H', timestamp) as hour, COUNT(*) as count FROM detection_logs WHERE alarm_level>0"
+    params = []
+    if date_from:
+        q += " AND timestamp>=?"
+        params.append(date_from)
+    if date_to:
+        q += " AND timestamp<=?"
+        params.append(date_to)
+    q += " GROUP BY hour ORDER BY hour"
+    return [dict(r) for r in _conn.execute(q, params).fetchall()]
+
+
+def get_violations_by_person(date_from=None, date_to=None, limit=20):
+    q = """SELECT identity, COUNT(*) as count
+           FROM detection_logs
+           WHERE alarm_level>0 AND identity IS NOT NULL AND identity != ''"""
+    params = []
+    if date_from:
+        q += " AND timestamp>=?"
+        params.append(date_from)
+    if date_to:
+        q += " AND timestamp<=?"
+        params.append(date_to)
+    q += " GROUP BY identity ORDER BY count DESC LIMIT ?"
+    params.append(limit)
+    return [dict(r) for r in _conn.execute(q, params).fetchall()]
+
+
+def get_camera_activity(date_from=None, date_to=None):
+    q = """SELECT c.name as camera_name, COUNT(dl.id) as count
+           FROM cameras c
+           LEFT JOIN detection_logs dl ON c.id=dl.camera_id"""
+    params = []
+    conditions = []
+    if date_from:
+        conditions.append("dl.timestamp>=?")
+        params.append(date_from)
+    if date_to:
+        conditions.append("dl.timestamp<=?")
+        params.append(date_to)
+    if conditions:
+        q += " WHERE " + " AND ".join(conditions)
+    q += " GROUP BY c.id ORDER BY count DESC"
+    return [dict(r) for r in _conn.execute(q, params).fetchall()]
+
+
+def get_compliance_over_time(rule_name=None, date_from=None, date_to=None):
+    q = """SELECT DATE(timestamp) as day,
+           COUNT(*) as total,
+           SUM(CASE WHEN alarm_level=0 THEN 1 ELSE 0 END) as compliant
+           FROM detection_logs WHERE 1=1"""
+    params = []
+    if rule_name:
+        q += " AND rules_triggered LIKE ?"
+        params.append(f"%{rule_name}%")
+    if date_from:
+        q += " AND timestamp>=?"
+        params.append(date_from)
+    if date_to:
+        q += " AND timestamp<=?"
+        params.append(date_to)
+    q += " GROUP BY day ORDER BY day"
+    return [dict(r) for r in _conn.execute(q, params).fetchall()]
+
+
+def get_faces():
+    return get_known_faces()
+
+
+def get_face(face_id):
+    return get_known_face(face_id)
+
+
+def add_face(
+    name,
+    department,
+    embedding_bytes,
+    photo_path="",
+    authorized=1,
+    authorized_cameras="[]",
+    external_uuid=None,
+    address="",
+    country="",
+    birth_date="",
+    phone="",
+    email="",
+    embedding_model="",
+):
+    return add_known_face(
+        name,
+        "member",
+        department,
+        embedding_bytes,
+        photo_path,
+        authorized_cameras,
+        0,
+        external_uuid=external_uuid,
+        address=address,
+        country=country,
+        birth_date=birth_date,
+        phone=phone,
+        email=email,
+        embedding_model=embedding_model,
+    )
+
+
+def update_face(face_id, **kwargs):
+    return update_known_face(face_id, **kwargs)
+
+
+def delete_face(face_id):
+    return delete_known_face(face_id)
+
+
+def delete_detection_log(log_id):
+    _write_execute("DELETE FROM detection_logs WHERE id=?", (log_id,))
+
+
+def cleanup_old_logs(cutoff_date):
+    cur = _write_execute("DELETE FROM detection_logs WHERE timestamp<?", (cutoff_date,))
+    return cur.rowcount
+
+
+def export_settings():
+    return export_settings_json()
+
+
+def import_settings(data):
+    return import_settings_json(data)
+
+
+def get_db_path():
+    return _DB_PATH
+
+
+def reset_database():
+    schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
+
+    _PRESERVE = {"app_settings"}
+
+    def _op(conn):
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.commit()
+        tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()
+        for t in tables:
+            if t["name"] in _PRESERVE:
+                continue
+            try:
+                conn.execute(f"DELETE FROM [{t['name']}]")
+            except Exception:
+                pass
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.commit()
+
+        try:
+            with open(schema_path) as f:
+                conn.executescript(f.read())
+        except Exception:
+            pass
+
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.commit()
+        except Exception:
+            pass
+
+        try:
+            saved_isolation = conn.isolation_level
+            conn.isolation_level = None
+            conn.execute("VACUUM")
+            conn.isolation_level = saved_isolation
+        except Exception:
+            pass
+
+    _write_call(_op)

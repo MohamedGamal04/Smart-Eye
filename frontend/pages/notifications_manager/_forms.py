@@ -1,0 +1,680 @@
+from __future__ import annotations
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFont, QPixmap
+from PySide6.QtWidgets import (
+    QComboBox,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
+from shiboken6 import isValid
+
+from backend.repository import db
+from backend.notifications.email_notifier import test_email
+from backend.notifications.webhook_notifier import test_webhook
+from frontend.app_theme import safe_set_point_size
+from frontend.styles._hero_header import make_hero_header
+from frontend.styles._banner_styles import make_edit_banner
+from frontend.widgets.confirm_delete_button import ConfirmDeleteButton
+from frontend.widgets.toggle_switch import ToggleSwitch
+
+from frontend.styles._input_styles import _FORM_INPUT_TITLE
+from frontend.styles._colors import (
+    _ACCENT,
+    _ACCENT_BG_08,
+    _ACCENT_BG_12,
+    _ACCENT_HI,
+    _ACCENT_HI_BG_18,
+    _BG_OVERLAY,
+    _BG_RAISED,
+    _BG_SURFACE,
+    _BORDER,
+    _BORDER_DIM,
+    _SUCCESS,
+    _TEXT_MUTED,
+    _TEXT_PRI,
+    _TEXT_SEC,
+)
+from frontend.ui_tokens import (
+    FONT_SIZE_15,
+    FONT_SIZE_BODY,
+    FONT_SIZE_CAPTION,
+    FONT_SIZE_LABEL,
+    FONT_SIZE_MICRO,
+    FONT_WEIGHT_BOLD,
+    FONT_WEIGHT_NORMAL,
+    RADIUS_6,
+    RADIUS_9,
+    RADIUS_LG,
+    SIZE_BTN_W_54,
+    SIZE_BTN_W_72,
+    SIZE_BTN_W_88,
+    SIZE_BTN_W_MD,
+    SIZE_BTN_W_SM,
+    SIZE_BTN_W_80,
+    SIZE_BADGE_H,
+    SIZE_CONTROL_MD,
+    SIZE_CONTROL_SM,
+    SIZE_ITEM_SM,
+    SIZE_LABEL_W,
+    SIZE_ROW_LG,
+    SIZE_ROW_72,
+    SPACE_LG,
+    SPACE_10,
+    SPACE_14,
+    SPACE_XXS,
+    SPACE_20,
+    SPACE_3,
+    SPACE_MD,
+    SPACE_SM,
+    SPACE_XS,
+    SPACE_XL,
+    SPACE_XXL,
+    SPACE_XXXS,
+)
+from ._constants import (
+    _PRIMARY_BTN,
+    _TEXT_BTN_BLUE,
+    _TEXT_BTN_GHOST,
+    _TEXT_BTN_RED,
+    _TEXT_BTN_RED_CONFIRM,
+    _combo_ss,
+    _make_banner,
+    _make_sdiv,
+    _srow,
+)
+
+
+class SmtpPanel(QWidget):
+    close_requested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._build()
+
+    def _build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        root.addWidget(
+            _make_banner(
+                "SMTP Configuration",
+                _ACCENT_HI,
+                _ACCENT_BG_08,
+                _ACCENT_HI_BG_18,
+            )
+        )
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet(f"QScrollArea {{ border:none; background:{_BG_SURFACE}; }}")
+        body = QWidget()
+        body.setStyleSheet(f"background:{_BG_SURFACE};")
+        body_l = QVBoxLayout(body)
+        body_l.setContentsMargins(0, 0, 0, SPACE_XXL)
+        body_l.setSpacing(0)
+        scroll.setWidget(body)
+        root.addWidget(scroll, stretch=1)
+
+        body_l.addWidget(_make_sdiv("Server"))
+
+        self._smtp_host = QLineEdit()
+        self._smtp_host.setPlaceholderText("smtp.gmail.com")
+        body_l.addWidget(_srow("SMTP Host", self._smtp_host))
+
+        port_tls = QWidget()
+        port_tls.setStyleSheet("background:transparent; border:none;")
+        pt = QHBoxLayout(port_tls)
+        pt.setContentsMargins(0, 0, 0, 0)
+        pt.setSpacing(SPACE_MD)
+        self._smtp_port = QSpinBox()
+        self._smtp_port.setRange(1, 65535)
+        self._smtp_port.setValue(587)
+        self._smtp_port.setFixedWidth(SIZE_BTN_W_88)
+        self._smtp_tls = ToggleSwitch()
+        self._smtp_tls.setChecked(True)
+        tls_lbl = QLabel("Use TLS / STARTTLS")
+        tls_lbl.setStyleSheet(f"color:{_TEXT_SEC}; font-size:{FONT_SIZE_LABEL}px; background:transparent;")
+        pt.addWidget(self._smtp_port)
+        pt.addWidget(self._smtp_tls)
+        pt.addWidget(tls_lbl)
+        pt.addStretch()
+        body_l.addWidget(_srow("Port", port_tls))
+
+        body_l.addWidget(_make_sdiv("Credentials"))
+
+        self._smtp_user = QLineEdit()
+        self._smtp_user.setPlaceholderText("your-email@gmail.com")
+        body_l.addWidget(_srow("Username", self._smtp_user))
+
+        pw_wrap = QWidget()
+        pw_wrap.setStyleSheet("background:transparent; border:none;")
+        ph = QHBoxLayout(pw_wrap)
+        ph.setContentsMargins(0, 0, 0, 0)
+        ph.setSpacing(SPACE_SM)
+        self._smtp_pass = QLineEdit()
+        self._smtp_pass.setEchoMode(QLineEdit.EchoMode.Password)
+        self._smtp_pass.setPlaceholderText("App password or SMTP password")
+        show_btn = QPushButton("Show")
+        show_btn.setFixedHeight(SIZE_CONTROL_SM)
+        show_btn.setFixedWidth(SIZE_BTN_W_54)
+        show_btn.setCheckable(True)
+        show_btn.setStyleSheet(
+            f"QPushButton{{border:{SPACE_XXXS}px solid {_BORDER};border-radius:{RADIUS_6}px;"
+            f"background:transparent;color:{_TEXT_SEC};font-size:{FONT_SIZE_CAPTION}px;min-height:{SIZE_ITEM_SM}px;}}"
+            f"QPushButton:hover{{color:{_TEXT_PRI};}}"
+            f"QPushButton:checked{{background:{_ACCENT_BG_12};"
+            f"color:{_ACCENT_HI};border-color:{_ACCENT};}}"
+        )
+        show_btn.toggled.connect(
+            lambda c: (
+                self._smtp_pass.setEchoMode(QLineEdit.EchoMode.Normal if c else QLineEdit.EchoMode.Password),
+                show_btn.setText("Hide" if c else "Show"),
+            )
+        )
+        ph.addWidget(self._smtp_pass, stretch=1)
+        ph.addWidget(show_btn)
+        body_l.addWidget(_srow("Password", pw_wrap))
+
+        hint_fr = QFrame()
+        hint_fr.setStyleSheet("background:transparent; border:none;")
+        hl = QVBoxLayout(hint_fr)
+        hl.setContentsMargins(SPACE_XL, SPACE_10, SPACE_XL, SPACE_10)
+        hint = QLabel("Tip: for Gmail use an <b>App Password</b> (Google Account \u2192 Security \u2192 App Passwords).")
+        hint.setStyleSheet(f"color:{_TEXT_MUTED}; font-size:{FONT_SIZE_CAPTION}px;")
+        hint.setWordWrap(True)
+        hl.addWidget(hint)
+        body_l.addWidget(hint_fr)
+        body_l.addStretch()
+
+        div = QFrame()
+        div.setFrameShape(QFrame.Shape.HLine)
+        div.setStyleSheet(f"background:{_BORDER_DIM}; border:none; max-height:{SPACE_XXXS}px;")
+        root.addWidget(div)
+
+        test_btn = QPushButton("Send Test Email")
+        test_btn.setFixedHeight(SIZE_CONTROL_MD)
+        test_btn.setStyleSheet(_TEXT_BTN_GHOST)
+        test_btn.clicked.connect(self._test_smtp)
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setFixedHeight(SIZE_CONTROL_MD)
+        cancel_btn.setFixedWidth(SIZE_BTN_W_SM)
+        cancel_btn.setStyleSheet(_TEXT_BTN_GHOST)
+        cancel_btn.clicked.connect(self.close_requested.emit)
+
+        save_btn = QPushButton("Save")
+        save_btn.setFixedHeight(SIZE_CONTROL_MD)
+        save_btn.setStyleSheet(_PRIMARY_BTN)
+        save_btn.clicked.connect(self._save_smtp)
+
+        ab = QHBoxLayout()
+        ab.setContentsMargins(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD)
+        ab.setSpacing(SPACE_SM)
+        ab.addWidget(test_btn)
+        ab.addStretch()
+        ab.addWidget(cancel_btn)
+        ab.addWidget(save_btn)
+        root.addLayout(ab)
+
+    def load(self):
+        self._smtp_host.setText(db.get_setting("smtp_host", "") or "")
+        self._smtp_port.setValue(int(db.get_setting("smtp_port", "587") or "587"))
+        self._smtp_user.setText(db.get_setting("smtp_user", "") or "")
+        self._smtp_pass.setText(db.get_setting("smtp_pass", "") or "")
+        tls_raw = db.get_setting("smtp_tls", True)
+        if isinstance(tls_raw, bool):
+            self._smtp_tls.setChecked(tls_raw)
+        else:
+            self._smtp_tls.setChecked(str(tls_raw) not in ("0", "false", "no"))
+
+    def _save_smtp(self):
+        db.set_setting("smtp_host", self._smtp_host.text().strip())
+        db.set_setting("smtp_port", str(self._smtp_port.value()))
+        db.set_setting("smtp_user", self._smtp_user.text().strip())
+        db.set_setting("smtp_pass", self._smtp_pass.text())
+        db.set_setting("smtp_tls", "1" if self._smtp_tls.isChecked() else "0")
+        from utils.config import invalidate_cache
+
+        invalidate_cache()
+        QMessageBox.information(self, "Saved", "SMTP configuration saved.")
+
+    def _test_smtp(self):
+        to = self._smtp_user.text().strip()
+        if not to:
+            QMessageBox.warning(
+                self,
+                "No Address",
+                "Enter a username / email address first, then save before testing.",
+            )
+            return
+        try:
+            ok = test_email(to)
+            if ok:
+                QMessageBox.information(
+                    self,
+                    "Email Sent",
+                    f"Test email sent to  {to}.\nCheck your inbox (and spam folder).",
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Send Failed",
+                    "Could not send the test email.\nVerify host / port / credentials and ensure the settings are saved.",
+                )
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", str(exc))
+
+
+class ProfilePanel(QWidget):
+    saved = Signal(int)
+    suppress_requested = Signal()
+    close_requested = Signal()
+    delete_requested = Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._profile: dict | None = None
+        self._edit_mode = False
+        self.build_empty()
+
+    def _clear(self):
+        self._reset_refs()
+        for w in self.findChildren(QWidget):
+            w.setParent(None)
+            w.deleteLater()
+        old = self.layout()
+        if old is not None:
+            from shiboken6 import delete
+
+            delete(old)
+
+    def build_empty(self):
+        self._clear()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        wrap = QWidget()
+        wrap.setStyleSheet("background:transparent; border:none;")
+        wl = QVBoxLayout(wrap)
+        wl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        wl.setSpacing(SPACE_10)
+        wl.setContentsMargins(SPACE_XXL, SPACE_XXL, SPACE_XXL, SPACE_XXL)
+
+        t = QLabel("No profile selected")
+        t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        t.setStyleSheet(f"font-size:{FONT_SIZE_BODY}px; font-weight:{FONT_WEIGHT_BOLD}; color:{_TEXT_SEC}; background:transparent;")
+        wl.addWidget(t)
+
+        s = QLabel("Select a profile from the list to edit it,\nor click  '+  Add Profile'  to create a new one.")
+        s.setWordWrap(True)
+        s.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        s.setStyleSheet(f"font-size:{FONT_SIZE_CAPTION}px; color:{_TEXT_MUTED}; background:transparent;")
+        wl.addWidget(s)
+
+        lay.addWidget(wrap)
+
+    def load_profile(self, profile: dict):
+        self._profile = profile
+        self._edit_mode = False
+        self._rebuild_form(profile)
+
+    def new_profile(self):
+        self._profile = None
+        self._edit_mode = True
+        self._rebuild_form(None)
+
+    def _rebuild_form(self, profile: dict | None):
+        self._clear()
+        editing = profile is not None
+        p = profile or {}
+        view_mode = editing and not self._edit_mode
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        name = p.get("name", "New Notification Profile" if not editing else "Notification Profile")
+        subtitle = p.get("endpoint", "") or "No target set"
+        ptype = (p.get("type") or "email").upper() if editing else "NEW"
+        type_badge = QLabel(ptype)
+        type_badge.setStyleSheet(
+            f"font-size:{FONT_SIZE_MICRO}px; font-weight:{FONT_WEIGHT_BOLD}; "
+            f"padding:{SPACE_3}px {SPACE_10}px; border-radius:{RADIUS_LG}px; "
+            f"background:{_ACCENT_BG_12}; color:{_ACCENT_HI};"
+        )
+        badge_wrap = QFrame()
+        badge_wrap.setFixedSize(SIZE_ROW_72, SIZE_ROW_72)
+        badge_wrap.setStyleSheet(
+            f"QFrame {{ background: {_BG_RAISED}; border: {SPACE_XXXS}px solid {_BORDER_DIM}; border-radius: {RADIUS_LG}px; }}"
+        )
+        bw = QVBoxLayout(badge_wrap)
+        bw.setContentsMargins(SPACE_3, SPACE_3, SPACE_3, SPACE_3)
+        bw.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        bw.addWidget(type_badge)
+        root.addWidget(
+            make_hero_header(
+                "",
+                name,
+                subtitle,
+                left_widget=badge_wrap,
+                parent=self,
+            )
+        )
+
+        self._edit_banner = make_edit_banner(f"Editing — {p.get('name', '')}", self)
+        self._edit_banner.setVisible(editing and self._edit_mode)
+        root.addWidget(self._edit_banner)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet(f"QScrollArea {{ border:none; background:{_BG_SURFACE}; }}")
+        body = QWidget()
+        body.setStyleSheet(f"background:{_BG_SURFACE};")
+        body_l = QVBoxLayout(body)
+        body_l.setContentsMargins(0, 0, 0, SPACE_XXL)
+        body_l.setSpacing(0)
+        scroll.setWidget(body)
+        root.addWidget(scroll, stretch=1)
+
+        if view_mode:
+            body_l.setContentsMargins(SPACE_XL, SPACE_LG, SPACE_XL, SPACE_LG)
+            body_l.setSpacing(SPACE_XXS)
+            def _info_row(label: str, value: str):
+                w = QWidget()
+                w.setStyleSheet("background:transparent;border:none;")
+                r = QHBoxLayout(w)
+                r.setContentsMargins(SPACE_XL, SPACE_XS, SPACE_XL, SPACE_XS)
+                r.setSpacing(SPACE_10)
+                lb = QLabel(f"{label}:")
+                lb.setFixedWidth(SIZE_LABEL_W)
+                lb.setStyleSheet(f"color:{_TEXT_SEC};font-size:{FONT_SIZE_LABEL}px;")
+                r.addWidget(lb)
+                vl = QLabel(value if value else "—")
+                vl.setStyleSheet(
+                    f"color:{_TEXT_PRI};font-size:{FONT_SIZE_BODY}px;"
+                    if value
+                    else f"color:{_TEXT_MUTED};font-size:{FONT_SIZE_CAPTION}px;font-style:italic;"
+                )
+                vl.setWordWrap(True)
+                r.addWidget(vl, stretch=1)
+                return w
+
+            def _div():
+                d = QFrame()
+                d.setFrameShape(QFrame.Shape.HLine)
+                d.setStyleSheet(f"background:{_BORDER_DIM};border:none;max-height:{SPACE_XXXS}px;")
+                return d
+
+            def _section(title: str):
+                c = QWidget()
+                c.setStyleSheet("background:transparent;border:none;")
+                r = QHBoxLayout(c)
+                r.setContentsMargins(SPACE_XL, SPACE_SM, SPACE_XL, SPACE_XXS)
+                r.setSpacing(SPACE_SM)
+                lb = QLabel(title.upper())
+                lb.setStyleSheet(
+                    f"font-size:{FONT_SIZE_MICRO}px;font-weight:{FONT_WEIGHT_BOLD};color:{_TEXT_MUTED};letter-spacing:{SPACE_XXXS}px;"
+                )
+                r.addWidget(lb)
+                ln = QFrame()
+                ln.setFrameShape(QFrame.Shape.HLine)
+                ln.setStyleSheet(f"background:{_BORDER_DIM};border:none;max-height:{SPACE_XXXS}px;")
+                r.addWidget(ln, stretch=1)
+                return c
+
+            body_l.addWidget(_section("General"))
+            body_l.addWidget(_info_row("Profile Name", p.get("name", "")))
+            body_l.addWidget(_div())
+            body_l.addWidget(_info_row("Type", (p.get("type") or "").upper()))
+            body_l.addWidget(_div())
+            body_l.addWidget(_info_row("Target", p.get("endpoint", "")))
+            body_l.addWidget(_div())
+            enabled_label = "Active" if bool(p.get("enabled", True)) else "Inactive"
+            body_l.addWidget(_info_row("Active", enabled_label))
+            body_l.addWidget(_div())
+            if (p.get("type") or "") == "webhook":
+                body_l.addWidget(_info_row("Auth Token", "Set" if p.get("auth_token") else "—"))
+                body_l.addWidget(_div())
+            body_l.addStretch()
+        else:
+            name_fr = QFrame()
+            name_fr.setFixedHeight(SIZE_ROW_LG)
+            name_fr.setStyleSheet(f"QFrame{{background:transparent;border:none;border-bottom:{SPACE_XXXS}px solid {_BORDER_DIM};}}")
+            nr = QHBoxLayout(name_fr)
+            nr.setContentsMargins(SPACE_XL, SPACE_MD, SPACE_XL, SPACE_MD)
+            nr.setSpacing(SPACE_20)
+            nlb = QLabel("Profile Name")
+            nlb.setFixedWidth(SIZE_LABEL_W)
+            nlb.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+            nlb.setStyleSheet(
+                f"color:{_TEXT_SEC}; font-size:{FONT_SIZE_LABEL}px; font-weight:{FONT_WEIGHT_NORMAL};background:transparent; border:none;"
+            )
+            nr.addWidget(nlb)
+            self._e_name = QLineEdit(p.get("name", ""))
+            self._e_name.setPlaceholderText("e.g.  Security Team Email")
+            self._e_name.setStyleSheet(_FORM_INPUT_TITLE)
+            nr.addWidget(self._e_name, stretch=1)
+            body_l.addWidget(name_fr)
+
+            if not (editing and self._edit_mode):
+                body_l.addWidget(_make_sdiv("Settings"))
+
+            self._e_type = QComboBox()
+            self._e_type.setStyleSheet(_combo_ss())
+            self._e_type.addItems(["email", "webhook"])
+            if p.get("type"):
+                self._e_type.setCurrentText(p["type"])
+            body_l.addWidget(_srow("Type", self._e_type))
+
+            self._e_endpoint = QLineEdit(p.get("endpoint", ""))
+            self._e_endpoint.setPlaceholderText("email@example.com  or  https://hooks.example.com/?")
+            body_l.addWidget(_srow("Target", self._e_endpoint))
+
+            self._e_auth = QLineEdit(p.get("auth_token", ""))
+            self._e_auth.setPlaceholderText("Bearer token (optional)")
+            self._e_auth.setEchoMode(QLineEdit.EchoMode.Password)
+            self._auth_row = _srow("Auth Token", self._e_auth)
+            body_l.addWidget(self._auth_row)
+
+            def _sync_auth(text: str):
+                self._auth_row.setVisible(text == "webhook")
+
+            self._e_type.currentTextChanged.connect(_sync_auth)
+            _sync_auth(self._e_type.currentText())
+
+            en_wrap = QWidget()
+            en_wrap.setStyleSheet("background:transparent; border:none;")
+            eh = QHBoxLayout(en_wrap)
+            eh.setContentsMargins(0, 0, 0, 0)
+            eh.setSpacing(SPACE_10)
+            self._e_enabled = ToggleSwitch()
+            self._e_enabled.setChecked(bool(p.get("enabled", True)))
+            elbl = QLabel("Profile is active")
+            elbl.setStyleSheet(f"color:{_TEXT_SEC}; font-size:{FONT_SIZE_LABEL}px; background:transparent;")
+            eh.addWidget(self._e_enabled)
+            eh.addWidget(elbl)
+            eh.addStretch()
+            body_l.addWidget(_srow("Active", en_wrap))
+
+            body_l.addStretch()
+
+        div = QFrame()
+        div.setFrameShape(QFrame.Shape.HLine)
+        div.setStyleSheet(f"background:{_BORDER_DIM}; border:none; max-height:{SPACE_XXXS}px;")
+        root.addWidget(div)
+
+        ab = QHBoxLayout()
+        ab.setContentsMargins(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD)
+        ab.setSpacing(SPACE_SM)
+
+        if editing:
+            pid = p.get("id")
+            del_btn = ConfirmDeleteButton("Delete", "Sure?")
+            del_btn.setFixedHeight(SIZE_CONTROL_MD)
+            del_btn.setFixedWidth(SIZE_BTN_W_MD)
+            del_btn.set_button_styles(_TEXT_BTN_RED, _TEXT_BTN_RED_CONFIRM)
+            del_btn.set_confirm_callback(lambda: self.delete_requested.emit(pid))
+            ab.addWidget(del_btn)
+
+        test_btn = QPushButton("Test")
+        test_btn.setFixedHeight(SIZE_CONTROL_MD)
+        test_btn.setFixedWidth(SIZE_BTN_W_72)
+        test_btn.setStyleSheet(_TEXT_BTN_GHOST)
+        test_btn.setVisible(editing)
+        test_btn.clicked.connect(lambda: self._test_profile(p))
+        ab.addWidget(test_btn)
+
+        ab.addStretch()
+
+        self._cancel_btn = QPushButton("Cancel")
+        self._cancel_btn.setFixedHeight(SIZE_CONTROL_MD)
+        self._cancel_btn.setFixedWidth(SIZE_BTN_W_SM)
+        self._cancel_btn.setStyleSheet(_TEXT_BTN_GHOST)
+        self._cancel_btn.clicked.connect(self.close_requested.emit)
+        ab.addWidget(self._cancel_btn)
+
+        self._close_btn = QPushButton("Close")
+        self._close_btn.setFixedHeight(SIZE_CONTROL_MD)
+        self._close_btn.setFixedWidth(SIZE_BTN_W_80)
+        self._close_btn.setStyleSheet(_TEXT_BTN_GHOST)
+        self._close_btn.clicked.connect(self.close_requested.emit)
+        ab.addWidget(self._close_btn)
+
+        self._edit_btn = QPushButton("Edit")
+        self._edit_btn.setFixedHeight(SIZE_CONTROL_MD)
+        self._edit_btn.setFixedWidth(SIZE_BTN_W_80)
+        self._edit_btn.setStyleSheet(_TEXT_BTN_BLUE)
+        self._edit_btn.clicked.connect(self._toggle_edit_mode)
+        ab.addWidget(self._edit_btn)
+
+        self._save_btn = QPushButton("Save")
+        self._save_btn.setFixedHeight(SIZE_CONTROL_MD)
+        self._save_btn.setStyleSheet(_PRIMARY_BTN)
+        self._save_btn.clicked.connect(self._do_save)
+        ab.addWidget(self._save_btn)
+
+        root.addLayout(ab)
+
+        self._set_edit_mode(self._edit_mode or not editing)
+
+    def _set_edit_mode(self, enabled: bool):
+        self._edit_mode = enabled
+        fields = [self._e_name, self._e_type, self._e_endpoint, self._e_auth]
+        for w in fields:
+            if w is not None and isValid(w):
+                w.setEnabled(enabled)
+        if self._e_enabled is not None and isValid(self._e_enabled):
+            self._e_enabled.setEnabled(enabled)
+        if self._edit_btn is not None and isValid(self._edit_btn):
+            if self._profile is None:
+                self._edit_btn.setVisible(False)
+            else:
+                self._edit_btn.setVisible(True)
+                if enabled:
+                    self._edit_btn.setText("Save")
+                    self._edit_btn.setStyleSheet(_PRIMARY_BTN)
+                else:
+                    self._edit_btn.setText("Edit")
+                    self._edit_btn.setStyleSheet(_TEXT_BTN_BLUE)
+        if self._save_btn is not None and isValid(self._save_btn):
+            self._save_btn.setVisible(self._profile is None)
+        if self._cancel_btn is not None and isValid(self._cancel_btn):
+            self._cancel_btn.setVisible(enabled or self._profile is None)
+        if self._close_btn is not None and isValid(self._close_btn):
+            self._close_btn.setVisible(not enabled and self._profile is not None)
+        if hasattr(self, "_edit_banner") and self._edit_banner is not None and isValid(self._edit_banner):
+            self._edit_banner.setVisible(enabled and self._profile is not None)
+
+    def _toggle_edit_mode(self):
+        if self._profile is None:
+            return
+        if not self._edit_mode:
+            self._edit_mode = True
+            self.suppress_requested.emit()
+            self._rebuild_form(self._profile)
+            return
+        self.suppress_requested.emit()
+        self._do_save()
+
+    def _do_save(self):
+        if self._e_name is None or not isValid(self._e_name):
+            return
+        self.suppress_requested.emit()
+        name = self._e_name.text().strip()
+        target = self._e_endpoint.text().strip()
+        if not name or not target:
+            return
+        ptype = self._e_type.currentText()
+        token = self._e_auth.text().strip() if ptype == "webhook" else ""
+        en_val = 1 if self._e_enabled.isChecked() else 0
+        saved_id = None
+        if self._profile:
+            db.update_notification_profile(
+                self._profile["id"],
+                name=name,
+                type=ptype,
+                endpoint=target,
+                auth_token=token,
+                enabled=en_val,
+            )
+            saved_id = self._profile["id"]
+        else:
+            pid = db.add_notification_profile(name, ptype, target, token)
+            if not en_val:
+                db.update_notification_profile(pid, enabled=0)
+            saved_id = pid
+        if saved_id is not None:
+            self.saved.emit(saved_id)
+        self._set_edit_mode(False)
+
+    def _test_profile(self, profile: dict):
+        ptype = profile.get("type", "email")
+        target = profile.get("endpoint", "")
+        token = profile.get("auth_token", "")
+        try:
+            if ptype == "email":
+                ok = test_email(target)
+            else:
+                ok = test_webhook(target, token or None)
+            if ok:
+                if db.get_bool("ui_show_save_popups", False):
+                    QMessageBox.information(
+                        self,
+                        "Success",
+                        f"Test {ptype} sent to:\n{target}",
+                    )
+                else:
+                    show_toast(self, f"Test {ptype} sent to {target}")
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Failed",
+                    f"Could not send test {ptype} to:\n{target}",
+                )
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", str(exc))
+    def _reset_refs(self):
+        self._e_name = None
+        self._e_type = None
+        self._e_endpoint = None
+        self._e_auth = None
+        self._e_enabled = None
+        self._edit_btn = None
+        self._save_btn = None
+        self._cancel_btn = None
+        self._close_btn = None

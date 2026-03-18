@@ -1,0 +1,262 @@
+import logging
+
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPaintEvent
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
+
+from frontend.app_theme import safe_set_point_size
+from frontend.styles._colors import (
+    _BG_OVERLAY,
+    _BG_RAISED,
+    _BORDER,
+    _TEXT_PRI,
+    _TEXT_SEC,
+    _TEXT_MUTED,
+    _ACCENT,
+    _ACCENT_ALT_BG_12,
+    _ACCENT_HI,
+    _SUCCESS,
+    _SUCCESS_DIM,
+    _WARNING,
+    _WARNING_DIM,
+    _WARNING_ALT,
+    _DANGER,
+)
+from frontend.ui_tokens import (
+    FONT_SIZE_CAPTION,
+    FONT_SIZE_LABEL,
+    FONT_WEIGHT_BOLD,
+    FONT_WEIGHT_SEMIBOLD,
+    RADIUS_XL,
+    SPACE_6,
+    SPACE_SM,
+    SPACE_10,
+    SPACE_MD,
+    SPACE_14,
+    SPACE_18,
+    SPACE_XXXS,
+    SIZE_LABEL_W_SM,
+    SIZE_PANEL_H_LG,
+)
+from utils.system_monitor import get_monitor
+
+logger = logging.getLogger(__name__)
+
+
+class AnimatedBar(QWidget):
+    def __init__(self, color_a: str, color_b: str, parent=None):
+        super().__init__(parent)
+        self._value = 0.0
+        self._target = 0.0
+        self._color_a = QColor(color_a)
+        self._color_b = QColor(color_b)
+        self.setFixedHeight(SPACE_6)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._timer = QTimer(self)
+        self._timer.setInterval(16)
+        self._timer.timeout.connect(self._step)
+
+    def set_value(self, v: float):
+        self._target = max(0.0, min(100.0, v))
+        if not self._timer.isActive():
+            self._timer.start()
+
+    def _step(self):
+        diff = self._target - self._value
+        if abs(diff) < 0.25:
+            self._value = self._target
+            self._timer.stop()
+        else:
+            self._value += diff * 0.10
+        self.update()
+
+    def paintEvent(self, _: QPaintEvent):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h, r = self.width(), self.height(), self.height() / 2
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(_BG_OVERLAY))
+        p.drawRoundedRect(0, 0, w, h, r, r)
+        fw = int(w * self._value / 100)
+        if fw > r * 2:
+            g = QLinearGradient(0, 0, fw, 0)
+            g.setColorAt(0.0, self._color_a)
+            g.setColorAt(1.0, self._color_b)
+            p.setBrush(g)
+            p.drawRoundedRect(0, 0, fw, h, r, r)
+        p.end()
+
+
+class MetricRow(QWidget):
+    def __init__(self, name: str, color_a: str, color_b: str, parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(SPACE_10)
+
+        lbl = QLabel(name)
+        lbl.setFixedWidth(SIZE_LABEL_W_SM)
+        lbl.setStyleSheet(
+            f"color: {_TEXT_MUTED}; font-size: {FONT_SIZE_CAPTION}px; font-weight: {FONT_WEIGHT_BOLD};"
+            f"letter-spacing: 0.{SPACE_6}px; background: transparent;"
+        )
+        layout.addWidget(lbl)
+
+        self._bar = AnimatedBar(color_a, color_b)
+        layout.addWidget(self._bar)
+
+        self._pct = QLabel("0%")
+        self._pct.setFixedWidth(SIZE_LABEL_W_SM)
+        self._pct.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._pct.setStyleSheet(
+            f"color: {_TEXT_SEC}; font-size: {FONT_SIZE_CAPTION}px; font-weight: {FONT_WEIGHT_SEMIBOLD};background: transparent;"
+        )
+        layout.addWidget(self._pct)
+
+    def update_value(self, value: float):
+        self._bar.set_value(value)
+        self._pct.setText(f"{value:.0f}%")
+        if value >= 85:
+            color = _DANGER
+        elif value >= 65:
+            color = _WARNING
+        else:
+            color = _TEXT_SEC
+        self._pct.setStyleSheet(
+            f"color: {color}; font-size: {FONT_SIZE_CAPTION}px; font-weight: {FONT_WEIGHT_SEMIBOLD};background: transparent;"
+        )
+
+
+class _Divider(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(SPACE_XXXS)
+        self.setStyleSheet(f"background: {_BG_OVERLAY};")
+
+
+class PerformanceWidget(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("PerformanceWidget")
+        self.setStyleSheet(f"""
+            QFrame#PerformanceWidget {{
+                background-color: {_BG_RAISED};
+                border: {SPACE_XXXS}px solid {_BORDER};
+                border-radius: {RADIUS_XL}px;
+            }}
+            QFrame#PerformanceWidget:hover {{
+                border-color: {_ACCENT_ALT_BG_12};
+            }}
+        """)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(SIZE_PANEL_H_LG)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(SPACE_18, SPACE_14, SPACE_18, SPACE_14)
+        root.setSpacing(0)
+
+        header = QHBoxLayout()
+        header.setSpacing(0)
+
+        title = QLabel("System Performance")
+        f = QFont()
+        safe_set_point_size(f, FONT_SIZE_LABEL)
+        f.setBold(True)
+        title.setFont(f)
+        title.setStyleSheet(f"color: {_TEXT_PRI}; background: transparent;")
+        header.addWidget(title)
+        header.addStretch()
+
+        root.addLayout(header)
+        root.addSpacing(SPACE_6)
+
+        self._inference_label = QLabel("Inference  —")
+        self._inference_label.setTextFormat(Qt.TextFormat.RichText)
+        self._inference_label.setStyleSheet(f"font-size: {FONT_SIZE_CAPTION}px; background: transparent; color: {_TEXT_MUTED};")
+        root.addWidget(self._inference_label)
+
+        root.addSpacing(SPACE_MD)
+        root.addWidget(_Divider())
+        root.addSpacing(SPACE_MD)
+
+        self._cpu = MetricRow("CPU", _SUCCESS_DIM, _SUCCESS)
+        root.addWidget(self._cpu)
+        root.addSpacing(SPACE_10)
+
+        self._ram = MetricRow("RAM", _ACCENT, _ACCENT_HI)
+        root.addWidget(self._ram)
+        root.addSpacing(SPACE_10)
+
+        self._gpu = MetricRow("GPU", _WARNING_DIM, _WARNING_ALT)
+        root.addWidget(self._gpu)
+        root.addSpacing(SPACE_SM)
+
+        self._ram_total = self._get_ram_total()
+        self._providers = QLabel("Face recognition: --\nObject detection: --\nRAM: --")
+        self._providers.setWordWrap(True)
+        self._providers.setStyleSheet(f"color: {_TEXT_MUTED}; font-size: {FONT_SIZE_CAPTION}px; background: transparent;")
+        root.addSpacing(SPACE_6)
+        root.addWidget(self._providers)
+
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.timeout.connect(self._refresh)
+        self._refresh_timer.start(1000)
+
+    def _refresh(self):
+        try:
+            m = get_monitor()
+            self._cpu.update_value(m.cpu)
+            self._ram.update_value(m.ram)
+            self._gpu.update_value(m.gpu_load)
+        except Exception:
+            logger.debug("Failed to refresh performance metrics", exc_info=True)
+
+    def update_inference(self, face_ms: float, obj_ms: float):
+        self._inference_label.setText(
+            f"<span style='color:{_TEXT_MUTED}'>Face</span> "
+            f"<span style='color:{_TEXT_SEC}; font-weight:{FONT_WEIGHT_SEMIBOLD}'>{face_ms:.0f}ms</span>"
+            f"<span style='color:{_TEXT_MUTED}'>&nbsp;·&nbsp;Obj</span> "
+            f"<span style='color:{_TEXT_SEC}; font-weight:{FONT_WEIGHT_SEMIBOLD}'>{obj_ms:.0f}ms</span>"
+        )
+
+    def update_providers(self, items, gpu_name: str = "", cpu_name: str = "", cpu_name_long: str = ""):
+        face_line = "Face recognition: --"
+        obj_line = "Object detection: --"
+        ram_line = f"Installed RAM: {self._ram_total}"
+        cpu_label = cpu_name or "CPU"
+        cpu_long = cpu_name_long or cpu_label
+        gpu_label = gpu_name or "GPU"
+
+        for ent in items:
+            prov = (ent.get("provider") or "").lower()
+            target = f"{'GPU' if 'dml' in prov or 'cuda' in prov or 'gpu' in prov else 'CPU'}"
+            if "gpu" in target.lower():
+                branded = f"GPU ({gpu_label})"
+            else:
+                branded = f"CPU ({cpu_long})"
+            if ent.get("type") == "face":
+                face_line = f"Face recognition: {branded}"
+            else:
+                obj_line = f"Object detection: {branded}"
+
+        self._providers.setText(face_line + "\n" + obj_line + "\n" + ram_line)
+
+    @staticmethod
+    def _format_bytes(num_bytes: int) -> str:
+        gb = num_bytes / (1024**3)
+        return f"{gb:.2f} GB"
+
+    def _get_ram_total(self) -> str:
+        try:
+            import psutil
+
+            return self._format_bytes(psutil.virtual_memory().total)
+        except Exception:
+            return "Unknown"

@@ -1,0 +1,169 @@
+from __future__ import annotations
+
+import os
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QPainter, QPainterPath, QPixmap
+
+from frontend.styles._btn_styles import _TEXT_BTN_BLUE, _TEXT_BTN_RED_DEFAULT, _TEXT_BTN_RED_CONFIRM, _PRIMARY_BTN, _DANGER_BTN
+
+from frontend.styles._colors import (
+    _BG_SURFACE,
+    _BG_RAISED,
+    _BG_OVERLAY,
+    _BORDER,
+    _BORDER_DIM,
+    _TEXT_PRI,
+    _TEXT_SEC,
+    _TEXT_MUTED,
+    _ACCENT,
+    _ACCENT_HI,
+    _DANGER,
+    _DANGER_DIM,
+    _SUCCESS,
+    _BG_BASE,
+    _ACCENT_BG_18,
+    _AVATAR_BG_1,
+    _AVATAR_BG_2,
+    _AVATAR_BG_3,
+    _AVATAR_BG_4,
+    _AVATAR_BG_5,
+    _AVATAR_BG_6,
+    _AVATAR_BG_7,
+    _AVATAR_BG_8,
+    _AVATAR_BG_9,
+    _AVATAR_BG_10,
+    _AVATAR_BG_11,
+    _AVATAR_BG_12,
+    _AVATAR_FG_1,
+    _AVATAR_FG_2,
+    _AVATAR_FG_3,
+    _AVATAR_FG_4,
+    _AVATAR_FG_5,
+    _AVATAR_FG_6,
+)
+from frontend.ui_tokens import (
+    FONT_SIZE_BODY,
+    FONT_SIZE_LABEL,
+    FONT_WEIGHT_NORMAL,
+    RADIUS_MD,
+    RADIUS_SM,
+    SIZE_CONTROL_22,
+    SIZE_CONTROL_SM,
+    SIZE_CONTROL_XS,
+    SIZE_ICON_10,
+    SIZE_ICON_12,
+    SIZE_ICON_TINY,
+    SIZE_ITEM_SM,
+    SPACE_10,
+    SPACE_20,
+    SPACE_28,
+    SPACE_6,
+    SPACE_MD,
+    SPACE_SM,
+    SPACE_XS,
+    SPACE_XXS,
+    SPACE_XXXS,
+)
+from frontend.styles._input_styles import _FORM_INPUTS, _FORM_COMBO
+
+_AVATAR_BG_COLORS = [
+    (_AVATAR_BG_1, _AVATAR_BG_2),
+    (_AVATAR_BG_3, _AVATAR_BG_4),
+    (_AVATAR_BG_5, _AVATAR_BG_6),
+    (_AVATAR_BG_7, _AVATAR_BG_8),
+    (_AVATAR_BG_9, _AVATAR_BG_10),
+    (_AVATAR_BG_11, _AVATAR_BG_12),
+]
+
+_AVATAR_FG_COLORS = [
+    _AVATAR_FG_1,
+    _AVATAR_FG_2,
+    _AVATAR_FG_3,
+    _AVATAR_FG_4,
+    _AVATAR_FG_5,
+    _AVATAR_FG_6,
+]
+
+
+_STYLESHEET = f"""
+QWidget {{
+    color: {_TEXT_PRI};
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+    font-size: {FONT_SIZE_BODY}px;
+    background-color: transparent;
+}}
+{_FORM_INPUTS}
+{_FORM_COMBO}
+QScrollArea {{ border: none; background-color: transparent; }}
+QScrollBar:vertical {{ border: none; background: transparent; width: {SPACE_SM}px; margin: 0; }}
+QScrollBar::handle:vertical {{
+    background: {_BORDER}; min-height: {SIZE_CONTROL_SM}px; border-radius: {RADIUS_SM}px;
+}}
+QScrollBar::handle:vertical:hover {{ background: {_TEXT_MUTED}; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+QCheckBox {{ color: {_TEXT_PRI}; spacing: {SPACE_SM}px; }}
+QCheckBox::indicator {{
+    width: {SIZE_ICON_TINY}px; height: {SIZE_ICON_TINY}px;
+    border: {SPACE_XXXS}px solid {_BORDER};
+    border-radius: {RADIUS_SM}px;
+    background-color: {_BG_RAISED};
+    image: none;
+}}
+QCheckBox::indicator:checked {{
+    background-color: {_ACCENT}; border-color: {_ACCENT};
+    image: url(frontend/assets/icons/checkmark.png);
+}}
+QCheckBox::indicator:hover {{ border-color: {_ACCENT_HI}; }}
+QLabel {{ background: transparent; }}
+QFormLayout QLabel {{ color: {_TEXT_SEC}; font-size: {FONT_SIZE_LABEL}px; font-weight: {FONT_WEIGHT_NORMAL}; }}
+QDialog {{ background-color: {_BG_SURFACE}; }}
+"""
+
+
+def _split_name_parts(full_name: str) -> tuple[str, str, str, str]:
+    parts = [p for p in (full_name or "").strip().split() if p]
+    first = parts[0] if len(parts) > 0 else ""
+    second = parts[1] if len(parts) > 1 else ""
+    third = parts[2] if len(parts) > 2 else ""
+    last = " ".join(parts[3:]) if len(parts) > 3 else ""
+    return first, second, third, last
+
+
+def _compose_name(first: str, second: str, third: str = "", last: str = "") -> str:
+    return " ".join([p.strip() for p in [first, second, third, last] if p and p.strip()])
+
+
+def _short_display_name(full_name: str) -> str:
+    first, second, _t, _l = _split_name_parts(full_name)
+    short = " ".join([p for p in [first, second] if p])
+    return short if short else (full_name or "Unknown")
+
+
+def _make_rounded_pixmap(photo_path: str, size: int, radius: int):
+    if not photo_path:
+        return None
+
+    resolved = photo_path if os.path.isabs(photo_path) else os.path.abspath(photo_path)
+    if not os.path.isfile(resolved):
+        return None
+    pix = QPixmap(resolved)
+    if pix.isNull():
+        return None
+    pix = pix.scaled(
+        size,
+        size,
+        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    pix = pix.copy((pix.width() - size) // 2, (pix.height() - size) // 2, size, size)
+    rounded = QPixmap(size, size)
+    rounded.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(rounded)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    path = QPainterPath()
+    path.addRoundedRect(0, 0, size, size, radius, radius)
+    painter.setClipPath(path)
+    painter.drawPixmap(0, 0, pix)
+    painter.end()
+    return rounded

@@ -1,0 +1,153 @@
+from frontend.styles._colors import (
+    _ACCENT,
+    _ACCENT_BG_22,
+    _ACCENT_HI_BG_12,
+    _BG_BASE,
+    _BG_OVERLAY,
+    _BG_RAISED,
+    _BORDER,
+    _TEXT_PRI,
+)
+from frontend.ui_tokens import (
+    FONT_SIZE_15,
+    FONT_SIZE_BODY,
+    FONT_SIZE_LABEL,
+    FONT_SIZE_SUBHEAD,
+    FONT_WEIGHT_BOLD,
+    RADIUS_9,
+    RADIUS_LG,
+    RADIUS_MD,
+    RADIUS_SM,
+    SIZE_CONTROL_22,
+    SIZE_CONTROL_XS,
+    SIZE_ICON_10,
+    SIZE_ICON_12,
+    SIZE_ITEM_SM,
+    SPACE_10,
+    SPACE_6,
+    SPACE_LG,
+    SPACE_SM,
+    SPACE_XS,
+    SPACE_XXXS,
+)
+
+
+_SEARCH_INPUT = (
+    "QLineEdit {"
+    f"    background-color: {_BG_BASE};"
+    "    border: none;"
+    f"    border-radius: {RADIUS_9}px;"
+    f"    padding: 0 {SPACE_10}px;"
+    f"    color: {_TEXT_PRI};"
+    f"    font-size: {FONT_SIZE_LABEL}px;"
+    "}"
+    f"QLineEdit:focus {{ background: {_BG_OVERLAY}; }}"
+)
+
+_FORM_INPUTS = (
+    "QLineEdit, QTextEdit, QPlainTextEdit, QDateEdit {"
+    f"    background-color: {_BG_RAISED};"
+    f"    border: {SPACE_XXXS}px solid {_BORDER};"
+    f"    border-radius: {RADIUS_MD}px;"
+    f"    padding: {SPACE_6}px {SPACE_10}px;"
+    f"    color: {_TEXT_PRI};"
+    f"    min-height: {SIZE_CONTROL_22}px;"
+    "}"
+    "QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QDateEdit:focus {"
+    f"    background-color: {_BG_OVERLAY};"
+    f"    border-color: {_ACCENT};"
+    "}"
+    "QSpinBox, QDoubleSpinBox {"
+    f"    background-color: {_BG_RAISED};"
+    f"    border: {SPACE_XXXS}px solid {_BORDER};"
+    f"    border-radius: {RADIUS_MD}px;"
+    f"    padding: 0 {SPACE_10}px;"
+    f"    color: {_TEXT_PRI};"
+    f"    min-height: {SIZE_CONTROL_22}px;"
+    "}"
+    "QSpinBox:focus, QDoubleSpinBox:focus {"
+    f"    border-color: {_ACCENT};"
+    "}"
+    "QSpinBox::up-button, QSpinBox::down-button, "
+    "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {"
+    f"    background: transparent; border: none; width: {SIZE_CONTROL_XS}px;"
+    "}"
+    "QSpinBox::up-button:hover, QSpinBox::down-button:hover, "
+    "QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {"
+    f"    background: {_ACCENT_HI_BG_12};"
+    "}"
+    f"QSpinBox::up-arrow {{ image: url(frontend/assets/icons/arrow_up.png); width: {SIZE_ICON_10}px; height: {SIZE_ICON_10}px; }}"
+    f"QSpinBox::down-arrow {{ image: url(frontend/assets/icons/arrow_down.png); width: {SIZE_ICON_10}px; height: {SIZE_ICON_10}px; }}"
+    f"QDoubleSpinBox::up-arrow {{ image: url(frontend/assets/icons/arrow_up.png); width: {SIZE_ICON_10}px; height: {SIZE_ICON_10}px; }}"
+    f"QDoubleSpinBox::down-arrow {{ image: url(frontend/assets/icons/arrow_down.png); width: {SIZE_ICON_10}px; height: {SIZE_ICON_10}px; }}"
+)
+
+_FORM_COMBO = (
+    "QComboBox {"
+    f"    background-color: {_BG_RAISED};"
+    f"    border: {SPACE_XXXS}px solid {_BORDER};"
+    f"    border-radius: {RADIUS_MD}px;"
+    f"    padding: 0 {SPACE_10}px;"
+    f"    color: {_TEXT_PRI};"
+    f"    min-height: {SIZE_CONTROL_22}px;"
+    "}"
+    "QComboBox:focus {"
+    f"    border-color: {_ACCENT};"
+    "}"
+    f"QComboBox::drop-down {{ border: none; width: {SIZE_CONTROL_XS}px; background: transparent; }}"
+    f"QComboBox::down-arrow {{ image: url(frontend/assets/icons/arrow_down.png); width: {SIZE_ICON_12}px; height: {SIZE_ICON_12}px; }}"
+    "QComboBox QAbstractItemView {"
+    f"    background-color: {_BG_OVERLAY};"
+    f"    border: {SPACE_XXXS}px solid {_BORDER};"
+    f"    selection-background-color: {_ACCENT_BG_22};"
+    f"    selection-color: {_TEXT_PRI};"
+    "    outline: none;"
+    f"    color: {_TEXT_PRI};"
+    f"    padding: {SPACE_XS}px;"
+    "}"
+    "QComboBox QAbstractItemView::item {"
+    f"    padding: {SPACE_6}px {SPACE_10}px;"
+    f"    border-radius: {RADIUS_SM}px;"
+    f"    min-height: {SIZE_ITEM_SM}px;"
+    "}"
+    "QComboBox QAbstractItemView::item:hover {"
+    f"    background-color: {_ACCENT_BG_22};"
+    "}"
+)
+
+_AUTH_INPUT_LG = (
+    "QLineEdit {"
+    f"    background: {_BG_OVERLAY};"
+    "    border: none;"
+    f"    border-radius: {RADIUS_LG}px;"
+    f"    padding: 0 {SPACE_LG}px;"
+    f"    color: {_TEXT_PRI};"
+    f"    font-size: {FONT_SIZE_SUBHEAD}px;"
+    "}"
+    f"QLineEdit:focus {{ background-color: {_BG_OVERLAY}; }}"
+)
+
+_AUTH_INPUT_MD = (
+    "QLineEdit {"
+    f"    background: {_BG_OVERLAY};"
+    "    border: none;"
+    f"    border-radius: {RADIUS_MD}px;"
+    f"    padding: 0 {SPACE_10}px;"
+    f"    color: {_TEXT_PRI};"
+    f"    font-size: {FONT_SIZE_BODY}px;"
+    "}"
+    f"QLineEdit:focus {{ background-color: {_BG_OVERLAY}; }}"
+)
+
+_FORM_INPUT_TITLE = (
+    "QLineEdit {"
+    f"    background: {_BG_RAISED};"
+    f"    border: {SPACE_XXXS}px solid {_BORDER};"
+    f"    border-radius: {RADIUS_MD}px;"
+    f"    color: {_TEXT_PRI};"
+    f"    font-size: {FONT_SIZE_15}px;"
+    f"    font-weight: {FONT_WEIGHT_BOLD};"
+    f"    padding: {SPACE_SM}px {SPACE_10}px;"
+    "}"
+    f"QLineEdit:focus {{ background: {_BG_OVERLAY}; border-color: {_ACCENT}; }}"
+)

@@ -1,0 +1,156 @@
+from backend.repository import db
+import threading
+import time
+
+
+_PLUGIN_CLASSES_CACHE = {
+    "ts": 0.0,
+    "data": None,
+}
+_PLUGIN_CLASSES_TTL = 2.0
+
+_CLASS_COLOR_CACHE: dict = {"ts": 0.0, "data": {}}
+_CLASS_COLOR_TTL = 5.0
+_CACHE_LOCK = threading.Lock()
+
+
+def _get_plugin_classes_cached(enabled_only=True):
+    now = time.time()
+    with _CACHE_LOCK:
+        if _PLUGIN_CLASSES_CACHE["data"] is not None and (now - _PLUGIN_CLASSES_CACHE["ts"] < _PLUGIN_CLASSES_TTL):
+            return _PLUGIN_CLASSES_CACHE["data"]
+    try:
+        data = db.get_plugin_classes(enabled_only=enabled_only)
+    except Exception:
+        data = []
+    with _CACHE_LOCK:
+        _PLUGIN_CLASSES_CACHE["ts"] = now
+        _PLUGIN_CLASSES_CACHE["data"] = data
+    return data
+
+
+def _get_class_colors_cached() -> dict:
+    now = time.time()
+    with _CACHE_LOCK:
+        if _CLASS_COLOR_CACHE["data"] and (now - _CLASS_COLOR_CACHE["ts"] < _CLASS_COLOR_TTL):
+            return _CLASS_COLOR_CACHE["data"]
+    try:
+        classes = db.get_plugin_classes(enabled_only=False)
+        colors = {c["class_name"]: c.get("color") or "" for c in classes}
+    except Exception:
+        colors = {}
+    with _CACHE_LOCK:
+        _CLASS_COLOR_CACHE["ts"] = now
+        _CLASS_COLOR_CACHE["data"] = colors
+    return colors
+
+
+def invalidate_cache():
+    with _CACHE_LOCK:
+        _PLUGIN_CLASSES_CACHE["ts"] = 0.0
+        _PLUGIN_CLASSES_CACHE["data"] = None
+        _CLASS_COLOR_CACHE["ts"] = 0.0
+        _CLASS_COLOR_CACHE["data"] = {}
+
+
+def merge_results(detection_results, camera_id, zone_info=None):
+    state = {
+        "identity": None,
+        "face_confidence": 0.0,
+        "liveness": 1.0,
+        "zone": None,
+        "zone_id": None,
+        "camera_id": camera_id,
+        "face_bbox": None,
+        "all_faces": [],
+        "object_bboxes": [],
+        "detections": {},
+    }
+    faces = detection_results.get("faces", [])
+    state["faces_full"] = faces
+    state["all_faces"] = [
+        {
+            "bbox": f["bbox"],
+            "identity": f["identity"]["name"] if f.get("identity") else None,
+            "confidence": f.get("confidence", 0.0),
+            "liveness": f.get("liveness", 1.0),
+        }
+        for f in faces
+    ]
+
+    for gf in detection_results.get("ghost_faces", []):
+        if not gf.get("bbox"):
+            continue
+        _gi = gf.get("identity")
+        state["all_faces"].append(
+            {
+                "bbox": gf["bbox"],
+                "identity": _gi["name"] if isinstance(_gi, dict) else _gi,
+                "confidence": gf.get("confidence", 0.0),
+                "liveness": gf.get("liveness", 1.0),
+                "ghost": True,
+            }
+        )
+    if faces:
+        best_face = max(faces, key=lambda f: f.get("confidence", 0))
+        if best_face.get("identity"):
+            state["identity"] = best_face["identity"]["name"]
+            state["face_id"] = best_face["identity"]["id"]
+            state["face_confidence"] = best_face["confidence"]
+        state["liveness"] = best_face.get("liveness", 1.0)
+        state["face_bbox"] = best_face["bbox"]
+
+    if zone_info:
+        state["zone"] = zone_info.get("name")
+        state["zone_id"] = zone_info.get("id")
+
+    objects = detection_results.get("objects", [])
+    class_detections = {}
+    class_colors = _get_class_colors_cached()
+    for obj in objects:
+        cls = obj["class_name"]
+        if cls not in class_detections:
+            class_detections[cls] = []
+        class_detections[cls].append(obj)
+        obj_entry = dict(obj)
+        color = class_colors.get(cls, "")
+        if color:
+            obj_entry["bbox_color"] = color
+        state["object_bboxes"].append(obj_entry)
+
+    for go in detection_results.get("ghost_objects", []):
+        if go.get("bbox"):
+            go_entry = {**go, "ghost": True}
+            color = class_colors.get(go.get("class_name", ""), "")
+            if color:
+                go_entry["bbox_color"] = color
+            state["object_bboxes"].append(go_entry)
+
+    plugin_classes = _get_plugin_classes_cached(enabled_only=True)
+    for pc in plugin_classes:
+        attr = pc["class_name"]
+        vtype = pc["value_type"]
+        if attr in class_detections:
+            if vtype == "boolean":
+                state["detections"][attr] = True
+            elif vtype == "count":
+                state["detections"][attr] = len(class_detections[attr])
+            else:
+                state["detections"][attr] = True
+        else:
+            if vtype == "boolean":
+                state["detections"][attr] = False
+            elif vtype == "count":
+                state["detections"][attr] = 0
+            else:
+                state["detections"][attr] = "unknown"
+
+    if state["identity"]:
+        state["detections"]["identity"] = state["identity"]
+    else:
+        state["detections"]["identity"] = "unknown"
+
+    state["face_time_ms"] = detection_results.get("face_time_ms", 0)
+    state["object_time_ms"] = detection_results.get("object_time_ms", 0)
+
+    return state

@@ -1,0 +1,100 @@
+This application includes the following third-party libraries, frameworks, and open-source components:
+
+--------------------------------------------------
+
+PySide6 (Qt for Python)
+License: LGPL v3
+Copyright (C) The Qt Company Ltd.
+https://www.qt.io/
+
+shiboken6
+License: LGPL v3
+Part of the PySide6 project
+https://www.qt.io/
+
+pyside6-addons
+License: LGPL v3
+Part of the PySide6 project
+https://www.qt.io/
+
+pyside6-essentials
+License: LGPL v3
+Part of the PySide6 project
+https://www.qt.io/
+
+Note: Users are allowed to replace the PySide6 libraries (DLLs) in the installation to comply with LGPL.
+
+--------------------------------------------------
+
+OpenCV (opencv-python, opencv-python-headless)
+License: Apache License 2.0
+https://opencv.org/
+
+--------------------------------------------------
+
+NumPy
+License: BSD 3-Clause License
+https://numpy.org/
+
+--------------------------------------------------
+
+psutil
+License: BSD 3-Clause License
+https://github.com/giampaolo/psutil
+
+--------------------------------------------------
+
+Requests
+License: Apache License 2.0
+https://docs.python-requests.org/
+
+--------------------------------------------------
+
+PyQtGraph
+License: MIT License
+https://www.pyqtgraph.org/
+
+--------------------------------------------------
+
+ONNX
+License: Apache License 2.0
+https://onnx.ai/
+
+--------------------------------------------------
+
+ONNX Runtime (DirectML)
+License: MIT License
+https://github.com/microsoft/onnxruntime
+
+--------------------------------------------------
+
+InsightFace
+License: MIT License
+https://github.com/deepinsight/insightface
+
+--------------------------------------------------
+
+GPUtil
+License: MIT License
+https://github.com/anderskm/gputil
+
+--------------------------------------------------
+
+WMI
+License: MIT License
+https://github.com/tjguk/wmi
+
+--------------------------------------------------
+
+ReportLab
+License: BSD License
+https://www.reportlab.com/
+
+--------------------------------------------------
+
+YOLOv11s (Modified / Fine-tuned)
+License: AGPL-3.0
+Original model by Ultralytics
+https://github.com/ultralytics/ultralytics
+
+Note: This application uses a fine-tuned version of YOLOv11s trained on a custom dataset and exported to ONNX format.

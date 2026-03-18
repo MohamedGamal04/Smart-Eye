@@ -1,0 +1,573 @@
+from __future__ import annotations
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
+    QComboBox,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+from backend.repository import db
+from frontend.services.rules_service import RulesService
+from frontend.widgets.confirm_delete_button import ConfirmDeleteButton
+from frontend.widgets.toggle_switch import ToggleSwitch
+from frontend.styles._colors import _ACCENT_BG_08, _SUCCESS_BG_10, _SUCCESS_BG_20
+from frontend.styles._banner_styles import make_edit_banner
+from ._widgets import build_rule_header
+from frontend.styles._input_styles import _FORM_INPUT_TITLE, _FORM_INPUTS
+from frontend.ui_tokens import (
+    FONT_SIZE_15,
+    FONT_SIZE_7,
+    FONT_SIZE_CAPTION,
+    FONT_SIZE_LABEL,
+    FONT_SIZE_MICRO,
+    FONT_SIZE_TINY,
+    FONT_WEIGHT_BOLD,
+    FONT_WEIGHT_NORMAL,
+    RADIUS_3,
+    RADIUS_5,
+    RADIUS_7,
+    RADIUS_9,
+    RADIUS_LG,
+    SIZE_BTN_W_MD,
+    SIZE_BTN_W_SM,
+    SIZE_CONTROL_MD,
+    SIZE_ICON_64,
+    SIZE_LABEL_W,
+    SIZE_ROW_48,
+    SIZE_ROW_72,
+    SIZE_PANEL_MD,
+    SIZE_ROW_LG,
+    SIZE_SECTION_H,
+    SPACE_10,
+    SPACE_14,
+    SPACE_18,
+    SPACE_20,
+    SPACE_6,
+    SPACE_MD,
+    SPACE_SM,
+    SPACE_XL,
+    SPACE_XS,
+    SPACE_XXL,
+    SPACE_XXS,
+    SPACE_XXXS,
+)
+
+from ._constants import (
+    _ACCENT,
+    _ACCENT_HI,
+    _ACTION_META,
+    _ADD_BTN_BLUE,
+    _BG_OVERLAY,
+    _BG_RAISED,
+    _BG_SURFACE,
+    _BORDER,
+    _BORDER_DIM,
+    _PRIMARY_BTN,
+    _SUCCESS,
+    _TEXT_BTN_GHOST,
+    _TEXT_BTN_RED,
+    _TEXT_BTN_RED_CONFIRM,
+    _TEXT_MUTED,
+    _TEXT_PRI,
+    _TEXT_SEC,
+    _combo_ss,
+    _make_sdiv,
+    _spin_ss,
+    _srow,
+)
+from ._widgets import AlarmCard, ConditionRow
+
+
+class _BaseRuleForm(QWidget):
+    def __init__(self, rules_service: RulesService, parent=None):
+        super().__init__(parent)
+        self._rules_service = rules_service
+        self._alarm_cards: list[AlarmCard] = []
+        self._condition_rows: list[ConditionRow] = []
+        self._alarm_vbox: QVBoxLayout | None = None
+        self._cond_vbox: QVBoxLayout | None = None
+
+    def _make_banner(self) -> QWidget:
+        raise NotImplementedError
+
+    def _build_form(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        root.addWidget(self._make_banner())
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet(f"""
+            QScrollArea {{ border:none; background:{_BG_SURFACE}; }}
+            QScrollBar:vertical {{ border:none; background:transparent; width:{SPACE_6}px; margin:0; }}
+            QScrollBar::handle:vertical {{ background:{_BORDER}; min-height:{SPACE_20}px; border-radius:{RADIUS_3}px; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height:0; }}
+        """)
+        body = QWidget()
+        body.setStyleSheet(f"background:{_BG_SURFACE};")
+        body_l = QVBoxLayout(body)
+        body_l.setContentsMargins(0, 0, 0, SPACE_XXL)
+        body_l.setSpacing(0)
+        scroll.setWidget(body)
+        root.addWidget(scroll, stretch=1)
+
+        self._populate_body(body_l)
+        body_l.addStretch()
+
+        div = QFrame()
+        div.setFrameShape(QFrame.Shape.HLine)
+        div.setStyleSheet(f"background:{_BORDER_DIM}; border:none; max-height:{SPACE_XXXS}px;")
+        root.addWidget(div)
+
+        root.addLayout(self._make_action_bar())
+
+    def _populate_body(self, layout: QVBoxLayout):
+        raise NotImplementedError
+
+    def _make_action_bar(self) -> QHBoxLayout:
+        raise NotImplementedError
+
+    def _build_name_row(self) -> QFrame:
+        fr = QFrame()
+        fr.setFixedHeight(SIZE_ROW_LG)
+        fr.setStyleSheet(f"QFrame{{background:transparent;border:none;border-bottom:{SPACE_XXXS}px solid {_BORDER_DIM};}}")
+        row = QHBoxLayout(fr)
+        row.setContentsMargins(SPACE_XL, SPACE_MD, SPACE_XL, SPACE_MD)
+        row.setSpacing(SPACE_20)
+        lb = QLabel("Rule Name")
+        lb.setFixedWidth(SIZE_LABEL_W)
+        lb.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        lb.setStyleSheet(
+            f"color:{_TEXT_SEC};font-size:{FONT_SIZE_LABEL}px;font-weight:{FONT_WEIGHT_NORMAL};background:transparent;border:none;"
+        )
+        row.addWidget(lb)
+        self._e_name = QLineEdit()
+        self._e_name.setPlaceholderText("e.g.  NO MASK!")
+        self._e_name.setStyleSheet(_FORM_INPUT_TITLE)
+        row.addWidget(self._e_name, stretch=1)
+        return fr
+
+    def _build_desc_row(self) -> QFrame:
+        fr = QFrame()
+        fr.setFixedHeight(SIZE_PANEL_MD)
+        fr.setStyleSheet(f"QFrame{{background:transparent;border:none;border-bottom:{SPACE_XXXS}px solid {_BORDER_DIM};}}")
+        row = QHBoxLayout(fr)
+        row.setContentsMargins(SPACE_XL, SPACE_MD, SPACE_XL, SPACE_MD)
+        row.setSpacing(SPACE_20)
+        lb = QLabel("Description")
+        lb.setFixedWidth(SIZE_LABEL_W)
+        lb.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        lb.setStyleSheet(
+            f"color:{_TEXT_SEC};font-size:{FONT_SIZE_LABEL}px;font-weight:{FONT_WEIGHT_NORMAL};"
+            f"background:transparent;border:none;margin-top:{SPACE_XS}px;"
+        )
+        row.addWidget(lb)
+        self._e_desc = QTextEdit()
+        self._e_desc.setPlaceholderText("Optional description\u2026")
+        self._e_desc.setStyleSheet(_FORM_INPUTS)
+        row.addWidget(self._e_desc, stretch=1)
+        return fr
+
+    def _build_core_fields(self, body_l: QVBoxLayout):
+        self._e_logic = QComboBox()
+        self._e_logic.addItems(["AND", "OR"])
+        self._e_logic.setStyleSheet(_combo_ss())
+        body_l.addWidget(_srow("Logic", self._e_logic))
+
+        self._e_action = QComboBox()
+        self._e_action.addItems(["alarm", "suppress", "log_only"])
+        self._e_action.setStyleSheet(_combo_ss())
+        self._action_pill = None
+        body_l.addWidget(_srow("Action", self._e_action))
+
+        self._e_camera = QComboBox()
+        self._e_camera.addItem("All Cameras", None)
+        for cam in db.get_cameras():
+            self._e_camera.addItem(cam["name"], cam["id"])
+        self._e_camera.setStyleSheet(_combo_ss())
+        body_l.addWidget(_srow("Camera", self._e_camera))
+
+        self._e_zone = QComboBox()
+        self._e_zone.addItem("Whole Frame", None)
+        for z in db.get_zones():
+            self._e_zone.addItem(z["name"], z["id"])
+        self._e_zone.setStyleSheet(_combo_ss())
+        body_l.addWidget(_srow("Zone", self._e_zone))
+
+        self._e_priority = QSpinBox()
+        self._e_priority.setRange(0, 100)
+        self._e_priority.setStyleSheet(_spin_ss())
+        body_l.addWidget(_srow("Priority", self._e_priority))
+
+        self._e_enabled = ToggleSwitch()
+        en_wrap = QWidget()
+        en_wrap.setStyleSheet("background:transparent;border:none;")
+        en_h = QHBoxLayout(en_wrap)
+        en_h.setContentsMargins(0, 0, 0, 0)
+        en_h.setSpacing(SPACE_10)
+        en_h.addWidget(self._e_enabled)
+        en_lbl = QLabel("Rule is active")
+        en_lbl.setStyleSheet(f"color:{_TEXT_SEC};font-size:{FONT_SIZE_LABEL}px;background:transparent;")
+        en_h.addWidget(en_lbl)
+        en_h.addStretch()
+        body_l.addWidget(_srow("Active", en_wrap))
+
+    def _refresh_action_pill(self, text: str):
+        if self._action_pill is None:
+            return
+        fg, bg, _border, label = _ACTION_META.get(text, (_TEXT_SEC, _ACCENT_BG_08, _BORDER_DIM, text.upper()))
+        self._action_pill.setText(label)
+        self._action_pill.setStyleSheet(f"""
+            color:{fg};
+            background-color:{bg};
+            border:none;
+            border-radius:{RADIUS_5}px; padding:0 {SPACE_SM}px;
+            font-size:{FONT_SIZE_MICRO}px; font-weight:{FONT_WEIGHT_BOLD}; letter-spacing:0.{SPACE_XS}px;
+        """)
+
+    def _build_conditions_section(self, body_l: QVBoxLayout):
+        body_l.addWidget(_make_sdiv("Conditions"))
+        cond_pad = QWidget()
+        cond_pad.setStyleSheet("background:transparent;")
+        cond_lay = QVBoxLayout(cond_pad)
+        cond_lay.setContentsMargins(SPACE_18, SPACE_14, SPACE_18, SPACE_14)
+        cond_lay.setSpacing(SPACE_SM)
+
+        add_cond = QPushButton("+  Add Condition")
+        add_cond.setFixedHeight(SIZE_SECTION_H)
+        add_cond.setStyleSheet(_ADD_BTN_BLUE)
+        add_cond.clicked.connect(self._add_condition_row)
+        cond_lay.addWidget(add_cond)
+
+        self._cond_vbox = QVBoxLayout()
+        self._cond_vbox.setSpacing(SPACE_SM)
+        self._no_cond_lbl = QLabel("No conditions yet \u2014 click the button above to add one.")
+        self._no_cond_lbl.setStyleSheet(
+            f"color:{_TEXT_MUTED}; font-size:{FONT_SIZE_CAPTION}px; font-style:italic; padding:{SPACE_6}px {SPACE_XXS}px {SPACE_XXS}px;"
+        )
+        self._cond_vbox.addWidget(self._no_cond_lbl)
+        cond_lay.addLayout(self._cond_vbox)
+        body_l.addWidget(cond_pad)
+
+    def _add_condition_row(self, attribute="object", operator="eq", value=""):
+        if hasattr(self, "_no_cond_lbl") and not self._no_cond_lbl.isHidden():
+            self._no_cond_lbl.hide()
+        row = ConditionRow(attribute, operator, value)
+        row.remove_requested.connect(self._remove_condition_row)
+        self._cond_vbox.addWidget(row)
+        self._condition_rows.append(row)
+
+    def _remove_condition_row(self, row: ConditionRow):
+        if row in self._condition_rows:
+            self._condition_rows.remove(row)
+        self._cond_vbox.removeWidget(row)
+        row.deleteLater()
+        if not self._condition_rows and hasattr(self, "_no_cond_lbl"):
+            self._no_cond_lbl.show()
+
+    def _build_alarms_section(self, body_l: QVBoxLayout):
+        body_l.addWidget(_make_sdiv("Alarm Escalation"))
+        alarm_pad = QWidget()
+        alarm_pad.setStyleSheet("background:transparent;")
+        alarm_lay = QVBoxLayout(alarm_pad)
+        alarm_lay.setContentsMargins(SPACE_18, SPACE_14, SPACE_18, SPACE_14)
+        alarm_lay.setSpacing(SPACE_10)
+
+        add_alarm = QPushButton("+  Add Escalation Level")
+        add_alarm.setFixedHeight(SIZE_SECTION_H)
+        add_alarm.setStyleSheet(_ADD_BTN_BLUE)
+        add_alarm.clicked.connect(self._add_alarm_card)
+        alarm_lay.addWidget(add_alarm)
+
+        self._alarm_vbox = QVBoxLayout()
+        self._alarm_vbox.setSpacing(SPACE_10)
+        self._no_alarm_lbl = QLabel("No escalation levels yet \u2014 click the button above to add one.")
+        self._no_alarm_lbl.setStyleSheet(
+            f"color:{_TEXT_MUTED}; font-size:{FONT_SIZE_CAPTION}px; font-style:italic; padding:{SPACE_6}px {SPACE_XXS}px {SPACE_XXS}px;"
+        )
+        self._alarm_vbox.addWidget(self._no_alarm_lbl)
+        alarm_lay.addLayout(self._alarm_vbox)
+        body_l.addWidget(alarm_pad)
+
+    def _add_alarm_card(self, data: dict | None = None):
+        if data is None:
+            next_level = (
+                max(
+                    (c.get_data()["escalation_level"] for c in self._alarm_cards),
+                    default=0,
+                )
+                + 1
+            )
+            data = {"escalation_level": min(next_level, 5)}
+        if hasattr(self, "_no_alarm_lbl") and not self._no_alarm_lbl.isHidden():
+            self._no_alarm_lbl.hide()
+        card = AlarmCard(data)
+        card.remove_requested.connect(self._remove_alarm_card)
+        self._alarm_vbox.addWidget(card)
+        self._alarm_cards.append(card)
+
+    def _remove_alarm_card(self, card: AlarmCard):
+        if card in self._alarm_cards:
+            self._alarm_cards.remove(card)
+        self._alarm_vbox.removeWidget(card)
+        card.deleteLater()
+        if not self._alarm_cards and hasattr(self, "_no_alarm_lbl"):
+            self._no_alarm_lbl.show()
+
+    def _collect_conditions(self) -> list[dict]:
+        return [r.get_data() for r in self._condition_rows if r.get_data()["attribute"] and r.get_data()["value"]]
+
+    def _collect_alarms(self) -> list[dict]:
+        return [c.get_data() for c in self._alarm_cards]
+
+
+class _EditRuleForm(_BaseRuleForm):
+    cancel_requested = Signal()
+    delete_requested = Signal()
+    saved = Signal()
+
+    def __init__(self, rule: dict, rules_service: RulesService, parent=None):
+        super().__init__(rules_service, parent)
+        self._rule = rule
+        self._rule_id = rule["id"]
+        self._build_form()
+        self._seed_from_rule(rule)
+
+    def _make_banner(self) -> QWidget:
+        wrap = QWidget()
+        wl = QVBoxLayout(wrap)
+        wl.setContentsMargins(0, 0, 0, 0)
+        wl.setSpacing(0)
+        name = self._rule.get("name", "") or "Rule"
+        subtitle = (self._rule.get("description") or "").strip() or "No description"
+        heat_level = int(self._rule.get("priority", 0) or 0)
+        try:
+            _a = self._rules_service.get_alarm_actions(self._rule_id)
+            if _a:
+                heat_level = max(heat_level, max(int(a.get("escalation_level", 0) or 0) for a in _a) * 3)
+        except Exception:
+            pass
+        wl.addWidget(
+            build_rule_header(
+                name,
+                subtitle,
+                self._rule.get("action", "log_only"),
+                self._rule.get("logic", "AND"),
+                int(self._rule.get("priority", 0) or 0),
+                heat_level,
+                bool(self._rule.get("enabled", 1)),
+                label="RULE",
+                parent=self,
+            )
+        )
+        wl.addWidget(make_edit_banner(f"Editing — {name}", self))
+        return wrap
+
+    def _populate_body(self, body_l: QVBoxLayout):
+        body_l.addWidget(self._build_name_row())
+        body_l.addWidget(self._build_desc_row())
+        self._build_core_fields(body_l)
+        self._build_conditions_section(body_l)
+        self._build_alarms_section(body_l)
+
+    def _make_action_bar(self) -> QHBoxLayout:
+        ab = QHBoxLayout()
+        ab.setContentsMargins(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD)
+        ab.setSpacing(SPACE_SM)
+        del_btn = ConfirmDeleteButton("Delete", "Sure?")
+        del_btn.setFixedHeight(SIZE_CONTROL_MD)
+        del_btn.setFixedWidth(SIZE_BTN_W_MD)
+        del_btn.set_button_styles(_TEXT_BTN_RED, _TEXT_BTN_RED_CONFIRM)
+        del_btn.set_confirm_callback(lambda: self.delete_requested.emit())
+        ab.addWidget(del_btn)
+        ab.addStretch()
+
+        cancel = QPushButton("Cancel")
+        cancel.setFixedHeight(SIZE_CONTROL_MD)
+        cancel.setFixedWidth(SIZE_BTN_W_SM)
+        cancel.setStyleSheet(_TEXT_BTN_GHOST)
+        cancel.clicked.connect(lambda: self.cancel_requested.emit())
+        ab.addWidget(cancel)
+
+        save = QPushButton("Save")
+        save.setFixedHeight(SIZE_CONTROL_MD)
+        save.setStyleSheet(_PRIMARY_BTN)
+        save.clicked.connect(self._do_save)
+        ab.addWidget(save)
+        return ab
+
+    def _seed_from_rule(self, rule: dict):
+        self._e_name.setText(rule.get("name", ""))
+        self._e_desc.setPlainText(rule.get("description", ""))
+        self._e_logic.setCurrentText(rule.get("logic", "AND"))
+        action = rule.get("action", "log_only")
+        self._e_action.setCurrentText(action)
+        self._refresh_action_pill(action)
+        self._e_priority.setValue(int(rule.get("priority", 0)))
+        self._e_enabled.setChecked(bool(rule.get("enabled", 1)))
+
+        if rule.get("camera_id"):
+            for i in range(self._e_camera.count()):
+                if self._e_camera.itemData(i) == rule["camera_id"]:
+                    self._e_camera.setCurrentIndex(i)
+                    break
+        if rule.get("zone_id"):
+            for i in range(self._e_zone.count()):
+                if self._e_zone.itemData(i) == rule["zone_id"]:
+                    self._e_zone.setCurrentIndex(i)
+                    break
+
+        for c in self._rules_service.get_rule_conditions(self._rule_id):
+            self._add_condition_row(c["attribute"], c["operator"], c["value"])
+
+        for a in self._rules_service.get_alarm_actions(self._rule_id):
+            self._add_alarm_card(a)
+
+    def _do_save(self):
+        name = self._e_name.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Required", "Rule name is required.")
+            self._e_name.setFocus()
+            return
+
+        self._rules_service.save_rule(
+            self._rule_id,
+            data=dict(
+                name=name,
+                description=self._e_desc.toPlainText().strip(),
+                logic=self._e_logic.currentText(),
+                action=self._e_action.currentText(),
+                priority=self._e_priority.value(),
+                camera_id=self._e_camera.currentData(),
+                zone_id=self._e_zone.currentData(),
+                enabled=self._e_enabled.isChecked(),
+            ),
+            conditions=self._collect_conditions(),
+            alarms=self._collect_alarms(),
+        )
+        self.saved.emit()
+
+
+class NewRulePanel(_BaseRuleForm):
+    saved = Signal()
+    close_requested = Signal()
+
+    def __init__(self, rules_service: RulesService, parent=None):
+        super().__init__(rules_service, parent)
+        self._build_form()
+
+    def _make_banner(self) -> QWidget:
+        banner = QFrame()
+        banner.setStyleSheet(f"""
+            QFrame {{
+                background:{_SUCCESS_BG_10};
+                border-bottom:{SPACE_XXXS}px solid {_SUCCESS_BG_20};
+                border-top:none;border-left:none;border-right:none;
+            }}
+        """)
+        bi = QHBoxLayout(banner)
+        bi.setContentsMargins(SPACE_XL, SPACE_SM, SPACE_XL, SPACE_SM)
+        bi.setSpacing(SPACE_SM)
+        dot = QLabel("\u25cf")
+        dot.setStyleSheet(f"color:{_SUCCESS};font-size:{FONT_SIZE_7}px;background:transparent;")
+        bi.addWidget(dot)
+        lbl = QLabel("New Rule \u2014 fill in the details and click Save")
+        lbl.setStyleSheet(f"color:{_SUCCESS};font-size:{FONT_SIZE_CAPTION}px;background:transparent;")
+        bi.addWidget(lbl)
+        bi.addStretch()
+        return banner
+
+    def _populate_body(self, body_l: QVBoxLayout):
+        body_l.addWidget(self._build_name_row())
+        body_l.addWidget(self._build_desc_row())
+        self._build_core_fields(body_l)
+        self._build_conditions_section(body_l)
+        self._build_alarms_section(body_l)
+
+        self._e_action.setCurrentText("log_only")
+        self._refresh_action_pill("log_only")
+        self._e_enabled.setChecked(True)
+
+    def _make_action_bar(self) -> QHBoxLayout:
+        ab = QHBoxLayout()
+        ab.setContentsMargins(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD)
+        ab.setSpacing(SPACE_SM)
+        ab.addStretch()
+        close = QPushButton("Close")
+        close.setFixedHeight(SIZE_CONTROL_MD)
+        close.setFixedWidth(SIZE_BTN_W_SM)
+        close.setStyleSheet(_TEXT_BTN_GHOST)
+        close.clicked.connect(lambda: self.close_requested.emit())
+        ab.addWidget(close)
+        save = QPushButton("Save")
+        save.setFixedHeight(SIZE_CONTROL_MD)
+        save.setStyleSheet(_PRIMARY_BTN)
+        save.clicked.connect(self._do_save)
+        ab.addWidget(save)
+        return ab
+
+    def reset(self):
+        self._alarm_cards.clear()
+        self._condition_rows.clear()
+        self._e_name.clear()
+        self._e_desc.clear()
+        self._e_logic.setCurrentIndex(0)
+        self._e_action.setCurrentText("log_only")
+        self._refresh_action_pill("log_only")
+        self._e_priority.setValue(0)
+        self._e_camera.setCurrentIndex(0)
+        self._e_zone.setCurrentIndex(0)
+        self._e_enabled.setChecked(True)
+        if self._cond_vbox:
+            while self._cond_vbox.count():
+                item = self._cond_vbox.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            if hasattr(self, "_no_cond_lbl"):
+                self._no_cond_lbl.show()
+                self._cond_vbox.addWidget(self._no_cond_lbl)
+        if self._alarm_vbox:
+            while self._alarm_vbox.count():
+                item = self._alarm_vbox.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            if hasattr(self, "_no_alarm_lbl"):
+                self._no_alarm_lbl.show()
+                self._alarm_vbox.addWidget(self._no_alarm_lbl)
+
+    def _do_save(self):
+        name = self._e_name.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Required", "Rule name is required.")
+            self._e_name.setFocus()
+            return
+
+        self._rules_service.save_rule(
+            None,
+            data=dict(
+                name=name,
+                description=self._e_desc.toPlainText().strip(),
+                logic=self._e_logic.currentText(),
+                action=self._e_action.currentText(),
+                priority=self._e_priority.value(),
+                camera_id=self._e_camera.currentData(),
+                zone_id=self._e_zone.currentData(),
+                enabled=self._e_enabled.isChecked(),
+            ),
+            conditions=self._collect_conditions(),
+            alarms=self._collect_alarms(),
+        )
+        self.saved.emit()
