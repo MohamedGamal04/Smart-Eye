@@ -46,7 +46,7 @@ jobs:
           output-dir: build
           output-file: SmartEye
           jobs: "2"
-          lto: "no"
+          lto: "yes"
           windows-console-mode: disable
           enable-plugins: pyside6
           show-scons: true
@@ -148,7 +148,7 @@ jobs:
             throw "Expected a *.dist folder under build/, but none was found."
           }
 
-          $zipPath = Join-Path $PWD "build\SmartEye-${{ github.run_number }}-dist.zip"
+          $zipPath = Join-Path $PWD "build\SmartEye-0.1.0-alpha.zip"
           if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
           Compress-Archive -Path (Join-Path $distDir.FullName '*') -DestinationPath $zipPath
 
