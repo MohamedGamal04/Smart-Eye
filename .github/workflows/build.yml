@@ -51,8 +51,8 @@ jobs:
           enable-plugins: pyside6
           show-scons: true
           include-package: |
-            cv2
-            numpy
+            # cv2
+            # numpy
             psutil
             PySide6
             shiboken6
@@ -67,6 +67,7 @@ jobs:
             backend
             frontend
             utils
+            streamlink 
           include-package-data: |
             reportlab
             pyqtgraph
