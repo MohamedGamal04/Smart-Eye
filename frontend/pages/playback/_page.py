@@ -229,7 +229,7 @@ class PlaybackPage(QWidget):
             f"color: {_TEXT_MUTED}; font-size: {FONT_SIZE_CAPTION}px; font-weight: {FONT_WEIGHT_BOLD}; letter-spacing: 0.{SPACE_XS}px;"
         )
         tl.addWidget(rec_lbl)
-        self._record_toggle = ToggleSwitch(active_color=_SUCCESS)
+        self._record_toggle = ToggleSwitch()
         self._record_toggle.setToolTip("Saves a clip to data/clips/ when a rule fires. Requires Detection ON.")
         self._record_toggle.toggled.connect(self._on_record_toggled)
         tl.addWidget(self._record_toggle)
@@ -500,8 +500,6 @@ class PlaybackPage(QWidget):
             self._playback_thread.set_detection_enabled(state)
 
     def _on_record_toggled(self, state: bool) -> None:
-        if state and not self._detect_toggle.isChecked():
-            self._detect_toggle.setChecked(True)
         if self._playback_thread:
             self._playback_thread.set_record_enabled(state)
 
