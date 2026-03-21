@@ -272,6 +272,7 @@ class PlaybackPage(QWidget):
         self._record_toggle.setToolTip("Saves a clip to data/clips/ when a rule fires. Requires Detection ON.")
         self._record_toggle.toggled.connect(self._on_record_toggled)
         tl.addWidget(self._record_toggle)
+        self._load_playback_toggle_settings()
 
         _sep3 = QWidget()
         _sep3.setFixedSize(SPACE_XXXS, SPACE_XL)
@@ -564,12 +565,30 @@ QSlider::handle:horizontal {{
         self._clip_status.setText(message)
 
     def _on_detection_toggled(self, state: bool) -> None:
+        try:
+            db.set_setting("playback_detection_enabled", bool(state))
+        except Exception:
+            pass
         if self._playback_thread:
             self._playback_thread.set_detection_enabled(state)
 
     def _on_record_toggled(self, state: bool) -> None:
+        try:
+            db.set_setting("playback_record_enabled", bool(state))
+        except Exception:
+            pass
         if self._playback_thread:
             self._playback_thread.set_record_enabled(state)
+
+    def _load_playback_toggle_settings(self) -> None:
+        try:
+            det = db.get_bool("playback_detection_enabled", False)
+            rec = db.get_bool("playback_record_enabled", False)
+            self._detect_toggle.setChecked(bool(det))
+            self._record_toggle.setChecked(bool(rec))
+        except Exception:
+            self._detect_toggle.setChecked(False)
+            self._record_toggle.setChecked(False)
 
     def _on_event_clicked(self, item) -> None:
         idx = self._events_list.row(item)
