@@ -87,6 +87,7 @@ jobs:
             pyqtgraph.tests
             pyqtgraph.opengl
             pyqtgraph.exporters
+            insightface.thirdparty.face3d.mesh.cython
             PySide6.QtWebEngine
             PySide6.QtWebEngineWidgets
             PySide6.QtWebEngineCore
@@ -153,20 +154,16 @@ jobs:
       - name: Create NSIS Installer
         shell: pwsh
         run: |
-          # Install NSIS
           choco install nsis -y
           
-          # Get app info
           $appInfo = Get-Content app_info.json | ConvertFrom-Json
           $appVersion = $appInfo.version
           
-          # Find the .dist folder
           $distDir = Get-ChildItem -Path (Join-Path $PWD 'build') -Directory -Filter *.dist | Select-Object -First 1
           if (-not $distDir) {
             throw "No .dist folder found"
           }
           
-          # Create dynamic NSIS script
           $nsiContent = @"
           !define APPNAME "SmartEye"
           !define VERSION "$appVersion"
@@ -236,7 +233,6 @@ jobs:
           $appName = $appInfo.name
           $appVersion = $appInfo.version
           $appBuild = Get-Date -Format "yyyyMMdd"
-          $appSlug = ($appName -replace '\s+', '')
 
           $installerPath = Join-Path $PWD "build\SmartEyeInstaller.exe"
           if (-not (Test-Path $installerPath)) {
