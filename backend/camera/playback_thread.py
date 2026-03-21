@@ -105,13 +105,15 @@ class PlaybackThread(QThread):
             )
 
         while self._running:
-            if self._paused:
-                time.sleep(0.05)
-                continue
+            force_read = False
             if self._seek_frame >= 0:
                 self._cap.set(cv2.CAP_PROP_POS_FRAMES, self._seek_frame)
                 frame_idx = self._seek_frame
                 self._seek_frame = -1
+                force_read = True
+            if self._paused and not force_read:
+                time.sleep(0.05)
+                continue
             t_start = time.time()
             ret, frame = self._cap.read()
             if not ret:
@@ -119,7 +121,7 @@ class PlaybackThread(QThread):
                 self.playback_finished.emit(self._camera_id)
                 break
 
-            if self._record_enabled:
+            if self._record_enabled and not self._paused:
                 self._frame_buffer.append(frame.copy())
                 while len(self._frame_buffer) > buf_max:
                     self._frame_buffer.popleft()
@@ -139,7 +141,8 @@ class PlaybackThread(QThread):
 
             self.position_changed.emit(self._camera_id, frame_idx, self._total_frames)
             self.frame_ready.emit(self._camera_id, frame, primary_state)
-            frame_idx += 1
+            if not self._paused:
+                frame_idx += 1
             elapsed = time.time() - t_start
             self._fps_lock.lock()
             try:

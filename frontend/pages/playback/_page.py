@@ -143,6 +143,8 @@ class PlaybackPage(QWidget):
         self._video_fps = 30.0
         self._saved_clips: list[str] = []
         self._rule_camera_id = -1
+        self._user_seeking = False
+        self._seek_was_playing = False
         self._build_ui()
         self._load_rule_cameras()
 
@@ -282,6 +284,8 @@ class PlaybackPage(QWidget):
         self._timeline_slider = QSlider(Qt.Orientation.Horizontal)
         self._timeline_slider.setRange(0, 100)
         self._timeline_slider.setValue(0)
+        self._timeline_slider.sliderPressed.connect(self._on_seek_pressed)
+        self._timeline_slider.sliderMoved.connect(self._on_seek_moved)
         self._timeline_slider.sliderReleased.connect(self._on_seek)
         cc.addWidget(self._timeline_slider)
 
@@ -289,14 +293,9 @@ class PlaybackPage(QWidget):
         ctrl_row.setSpacing(SPACE_6)
 
         self._play_btn = _icon_btn("frontend/assets/icons/play.png", SIZE_SECTION_H)
-        self._play_btn.setToolTip("Play / Resume")
+        self._play_btn.setToolTip("Play / Pause")
         self._play_btn.clicked.connect(self._toggle_play)
         ctrl_row.addWidget(self._play_btn)
-
-        self._pause_btn = _icon_btn("frontend/assets/icons/pause.png", SIZE_SECTION_H)
-        self._pause_btn.setToolTip("Pause")
-        self._pause_btn.clicked.connect(self._pause)
-        ctrl_row.addWidget(self._pause_btn)
 
         self._stop_btn = _icon_btn("frontend/assets/icons/stop.png", SIZE_SECTION_H, danger=True)
         self._stop_btn.setToolTip("Stop")
@@ -472,9 +471,10 @@ class PlaybackPage(QWidget):
         frame_idx = state.get("frame_index", 0)
         self._current_frame = frame_idx
         self._video_widget.update_frame(frame, state)
-        self._timeline_slider.blockSignals(True)
-        self._timeline_slider.setValue(frame_idx)
-        self._timeline_slider.blockSignals(False)
+        if not self._user_seeking:
+            self._timeline_slider.blockSignals(True)
+            self._timeline_slider.setValue(frame_idx)
+            self._timeline_slider.blockSignals(False)
         if self._total_frames > 0:
             cur_sec = frame_idx / self._video_fps
             total_sec = self._total_frames / self._video_fps
@@ -511,19 +511,23 @@ class PlaybackPage(QWidget):
                 self._playback_thread.seek(frame_idx)
 
     def _on_finished(self, camera_id=None) -> None:
-        pass
+        self._sync_play_button(paused=True)
 
     def _toggle_play(self) -> None:
         if self._playback_thread is None:
+            if self._path_edit.text():
+                self._start_playback(self._path_edit.text())
+            return
+        if not self._playback_thread.isRunning():
+            if self._path_edit.text():
+                self._start_playback(self._path_edit.text())
             return
         if self._playback_thread.is_paused:
             self._playback_thread.resume()
+            self._sync_play_button(paused=False)
         else:
             self._playback_thread.pause()
-
-    def _pause(self) -> None:
-        if self._playback_thread:
-            self._playback_thread.pause()
+            self._sync_play_button(paused=True)
 
     def _stop(self) -> None:
         if self._playback_thread:
@@ -534,10 +538,30 @@ class PlaybackPage(QWidget):
         self._timeline_slider.setValue(0)
         self._fps_label.setText("FPS: —")
         self._time_label.setText("00:00:00 / 00:00:00")
+        self._sync_play_button(paused=True)
+
+    def _on_seek_pressed(self) -> None:
+        self._user_seeking = True
+        self._seek_was_playing = False
+        if self._playback_thread and self._playback_thread.isRunning():
+            self._seek_was_playing = not self._playback_thread.is_paused
+            self._playback_thread.pause()
+            self._sync_play_button(paused=True)
+
+    def _on_seek_moved(self, value: int) -> None:
+        if self._total_frames > 0:
+            cur_sec = value / self._video_fps
+            total_sec = self._total_frames / self._video_fps
+            self._time_label.setText(f"{self._format_time(cur_sec)} / {self._format_time(total_sec)}")
 
     def _on_seek(self) -> None:
         if self._playback_thread:
             self._playback_thread.seek(self._timeline_slider.value())
+            if self._seek_was_playing:
+                self._playback_thread.resume()
+                self._sync_play_button(paused=False)
+        self._user_seeking = False
+        self._seek_was_playing = False
 
     def _change_speed(self, idx: int) -> None:
         speeds = [0.25, 0.5, 1.0, 2.0, 4.0]
@@ -572,14 +596,38 @@ class PlaybackPage(QWidget):
             return
         for _ts, tag, path in entries:
             name = os.path.basename(path)
-            item = QListWidgetItem(f"[{tag}] {name}")
+            item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, path)
+            item.setSizeHint(QSize(0, SIZE_SECTION_H))
+            row = QWidget()
+            row.setStyleSheet("background: transparent;")
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(SPACE_SM, 0, SPACE_SM, 0)
+            rl.setSpacing(SPACE_SM)
+            del_btn = _icon_btn("frontend/assets/icons/x.png", SIZE_CONTROL_SM, danger=True)
+            del_btn.setToolTip("Delete clip")
+            del_btn.clicked.connect(lambda _=False, p=path: self._delete_clip(p))
+            rl.addWidget(del_btn)
+            lbl = QLabel(f"[{tag}] {name}")
+            lbl.setStyleSheet(f"color: {_TEXT_MUTED}; font-size: {FONT_SIZE_CAPTION}px;")
+            lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            rl.addWidget(lbl, stretch=1)
             self._clips_list.addItem(item)
+            self._clips_list.setItemWidget(item, row)
 
     def _on_clip_item_activated(self, item) -> None:
         path = item.data(Qt.ItemDataRole.UserRole)
         if path and os.path.exists(path):
             self._start_playback(path)
+
+    def _delete_clip(self, path: str) -> None:
+        try:
+            if path and os.path.exists(path):
+                os.remove(path)
+                self._clip_status.setText(f"Deleted: {os.path.basename(path)}")
+        except Exception as e:
+            self._clip_status.setText(f"Delete failed: {e}")
+        self._refresh_clips_list()
     def _load_rule_cameras(self) -> None:
         self._rule_combo.clear()
         self._rule_combo.addItem("Global (no camera)", -1)
@@ -632,6 +680,14 @@ class PlaybackPage(QWidget):
         self._refresh_clips_list()
         self._clip_status.setText("")
         self._playback_thread.start()
+        self._sync_play_button(paused=False)
+
+    def _sync_play_button(self, paused: bool) -> None:
+        icon_path = "frontend/assets/icons/play.png" if paused else "frontend/assets/icons/pause.png"
+        pix = QPixmap(icon_path)
+        if not pix.isNull():
+            self._play_btn.setIcon(QIcon(pix))
+            self._play_btn.setIconSize(QSize(int(SIZE_SECTION_H * 0.52), int(SIZE_SECTION_H * 0.52)))
 
     @staticmethod
     def _format_time(seconds: float) -> str:
