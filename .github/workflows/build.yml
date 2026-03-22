@@ -169,6 +169,9 @@ jobs:
           !define VERSION "$appVersion"
           !define EXEFILE "SmartEye.exe"
           
+          SetCompressor /SOLID lzma
+          SetCompressorDictSize 64
+          
           Name "`${APPNAME} Setup"
           
           !define MUI_ICON "frontend\assets\icons\icon.ico"
@@ -220,9 +223,32 @@ jobs:
           
           $nsiContent | Out-File -FilePath "SmartEye.nsi" -Encoding UTF8
           
+          Write-Host "Compiling installer with LZMA compression (this may take a few minutes)..."
           & "C:\Program Files (x86)\NSIS\makensis.exe" SmartEye.nsi
           
+          if ($LASTEXITCODE -ne 0) {
+            throw "NSIS compilation failed with exit code $LASTEXITCODE"
+          }
+          
           Write-Host "Installer created successfully!"
+
+      - name: Compress installer with UPX
+        shell: pwsh
+        run: |
+          $installerPath = Join-Path $PWD "build\SmartEyeInstaller.exe"
+          if (Test-Path $installerPath) {
+            $sizeBefore = (Get-Item $installerPath).Length / 1MB
+            Write-Host "Installer size before UPX: $([math]::Round($sizeBefore, 2)) MB"
+            
+            Write-Host "Compressing installer with UPX (maximum compression)..."
+            upx -9 $installerPath
+            
+            $sizeAfter = (Get-Item $installerPath).Length / 1MB
+            Write-Host "Installer size after UPX: $([math]::Round($sizeAfter, 2)) MB"
+            Write-Host "Compression saved: $([math]::Round($sizeBefore - $sizeAfter, 2)) MB ($([math]::Round((($sizeBefore - $sizeAfter) / $sizeBefore) * 100, 1))% reduction)"
+          } else {
+            Write-Host "Warning: Installer not found at $installerPath"
+          }
 
       - name: Collect release files
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
