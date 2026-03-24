@@ -1,3 +1,5 @@
+import logging
+
 from PySide6.QtCore import (
     QByteArray,
     Qt,
@@ -28,6 +30,7 @@ from frontend.widgets.sidebar import SidebarWidget, LOGO_ICON_PATH
 from frontend.state.session import build_trusted_user, compute_access, pick_initial_tab
 from utils import config
 
+logger = logging.getLogger(__name__)
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -118,6 +121,7 @@ class MainWindow(QMainWindow):
             self._sidebar.set_active("dashboard")
             self._current_key = "dashboard"
             self._mark_active("dashboard")
+            self._log_page_state("startup")
         self._sidebar.set_access(set(), False)
         if self._auth_required:
             self._require_login()
@@ -171,6 +175,7 @@ class MainWindow(QMainWindow):
             page.on_activated()
         if prev_key and prev_key != key:
             self._maybe_unload_on_leave(prev_key)
+        self._log_page_state(f"navigated:{key}")
 
     def _mark_active(self, key: str) -> None:
         import time
@@ -227,6 +232,7 @@ class MainWindow(QMainWindow):
             pass
         page.deleteLater()
         self._pages[key] = None
+        self._log_page_state(f"unloaded:{key}")
 
     def _acquire_services(self, key: str) -> None:
         spec = self._page_specs.get(key)
@@ -241,6 +247,20 @@ class MainWindow(QMainWindow):
             return
         for svc in spec.services:
             self._service_manager.release(svc)
+
+    def _log_page_state(self, reason: str) -> None:
+        try:
+            loaded = [k for k, v in self._pages.items() if v is not None]
+            unloaded = [k for k, v in self._pages.items() if v is None]
+            logger.info(
+                "Page state (%s) current=%s loaded=%s unloaded=%s",
+                reason,
+                self._current_key,
+                loaded,
+                unloaded,
+            )
+        except Exception:
+            pass
 
     def _build_auth_overlay(self):
         self._auth_overlay = AuthOverlay(self)
