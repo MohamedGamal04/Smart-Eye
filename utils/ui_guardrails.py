@@ -93,7 +93,7 @@ def main() -> int:
         for path, line_no, snippet in inline_hotspot[:20]:
             print(f"  - {path.relative_to(ROOT)}:{line_no}: {snippet}")
 
-    # Non-zero if hard-guard rails fail.
+
     if missing_theme or input_underlines:
         return 1
     return 0

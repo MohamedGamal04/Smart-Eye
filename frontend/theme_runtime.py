@@ -89,7 +89,7 @@ def _load_payload(path: Path | None) -> dict:
 
 
 def get_active_theme_payload() -> dict:
-    # Cache key includes chosen theme name and explicit path so runtime reads are cheap.
+
     key = f"{_safe_get_theme_name()}|{_safe_get_theme_path_setting()}"
     if _THEME_CACHE.get("key") == key:
         cached = _THEME_CACHE.get("payload")

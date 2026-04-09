@@ -2,7 +2,7 @@
 
 
 def get_theme(name="dark"):
-    # Rebuild theme from current settings/theme json so it can apply live.
+
     import frontend.styles._colors as _colors
     import frontend.styles.theme_parts as _theme_parts
 

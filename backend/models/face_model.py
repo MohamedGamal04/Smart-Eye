@@ -36,7 +36,7 @@ def normalize_gender(value) -> str:
         if value.size == 0:
             return "unknown"
         if value.size >= 2:
-            # Typical genderage vector: [female_score, male_score].
+
             try:
                 female_score = float(value.flat[0])
                 male_score = float(value.flat[1])
@@ -85,7 +85,7 @@ def get_allowed_modules() -> list[str]:
         if raw:
             mods = _json.loads(raw) if isinstance(raw, str) else raw
             if isinstance(mods, list) and mods:
-                # One-time migration: pre-gender configs may lack genderage.
+
                 migrated = db.get_bool("insightface_allowed_modules_genderage_migrated", False)
                 if not migrated and "genderage" not in mods:
                     mods = list(mods) + ["genderage"]
@@ -150,7 +150,7 @@ def _detect_providers() -> list[str]:
 
     providers = []
     if use_gpu:
-        # Prefer common GPU providers first, then always keep CPU fallback.
+
         for p in (
             "CUDAExecutionProvider",
             "DmlExecutionProvider",

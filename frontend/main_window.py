@@ -206,14 +206,14 @@ class MainWindow(QMainWindow):
                 self._sidebar.refresh_theme()
             self._theme_dirty_pages = set(loaded_keys)
 
-            # Avoid re-entrant page destruction while Settings save is still active.
+
             current_key = self._current_key or "dashboard"
             if current_key == "settings":
                 QTimer.singleShot(120, lambda ck=current_key: self._recreate_current_after_theme(ck))
             elif current_key:
                 QTimer.singleShot(0, lambda ck=current_key: self._recreate_current_after_theme(ck))
 
-            # Re-polish existing widget tree so the refreshed app stylesheet takes effect immediately.
+
             self.style().unpolish(self)
             self.style().polish(self)
             self.update()
@@ -601,7 +601,7 @@ class MainWindow(QMainWindow):
         with contextlib.suppress(Exception):
             self._cleanup_timer.stop()
 
-        # Stop page-owned workers (playback, timers, etc.) before global service teardown.
+
         for key, page in list(self._pages.items()):
             if page is None:
                 continue

@@ -604,7 +604,7 @@ class DetectorManager:
                 f["identity"] = best.get("identity")
                 f["confidence"] = best.get("confidence")
                 try:
-                    # Keep confidence responsive between identify refreshes in live inference.
+
                     det_conf = float(f.get("det_score", 0.0) or 0.0)
                     if det_conf > 0.0:
                         prev_conf = float(f.get("confidence", 0.0) or 0.0)

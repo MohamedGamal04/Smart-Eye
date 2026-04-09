@@ -231,7 +231,7 @@ class GeneralTab(QWidget):
         db.set_setting("experimental_mode_enabled", "1" if exp_on else "0")
         self.settings_saved.emit()
         new_theme_json = "" if theme_value == "dark" else f"data/themes/{theme_value}.json"
-        # Runtime theme switching is disabled for stability; apply after app restart.
+
         self.debug_mode_changed.emit(debug_on)
         self.experimental_mode_changed.emit(exp_on)
         if db.get_bool("ui_show_save_popups", False):
@@ -303,7 +303,7 @@ class GeneralTab(QWidget):
         theme_val = str(db.get_setting("theme", "dark") or "dark").strip().lower()
         idx = self._theme_combo.findData(theme_val)
         self._theme_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        # This field is only for importing new themes, not showing active theme path.
+
         self._pending_theme_import_path = ""
         self._theme_path_edit.setText("")
         self._debug_toggle.setChecked(db.get_bool("debug_mode_enabled", False))
