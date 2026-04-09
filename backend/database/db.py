@@ -1238,12 +1238,21 @@ def add_clip(path: str, source: str, camera_id: int | None, ts: int | None, face
         obj_json = "[]"
 
     def _op(conn):
+        safe_camera_id = camera_id
+        if safe_camera_id is not None:
+            try:
+                row = conn.execute("SELECT 1 FROM cameras WHERE id=?", (safe_camera_id,)).fetchone()
+                if row is None:
+                    safe_camera_id = None
+            except Exception:
+                safe_camera_id = None
+
         conn.execute(
             """
             INSERT OR REPLACE INTO clips (path, source, camera_id, ts, face_label, rules_triggered, object_types)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (path, source, camera_id, ts, face_label, rules_json, obj_json),
+            (path, source, safe_camera_id, ts, face_label, rules_json, obj_json),
         )
         conn.commit()
 
