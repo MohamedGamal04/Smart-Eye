@@ -20,6 +20,7 @@ from frontend.styles._colors import (
     _ACCENT_HI_BG_28,
     _ACCENT_HI_BG_45,
     _ACCENT_SUB,
+    _BG_BASE,
     _BG_CHECK,
     _BG_DARKEST,
     _BG_OVERLAY,
@@ -45,6 +46,7 @@ from frontend.styles._colors import (
     _WHITE_02,
     _WHITE_03,
 )
+from frontend.icon_theme import themed_icon_path
 from frontend.ui_tokens import (
     FONT_SIZE_BODY,
     FONT_SIZE_CAPTION,
@@ -94,7 +96,7 @@ def _base_styles() -> str:
 QMainWindow, QWidget {{
     background-color: {_BG_SURFACE};
     color: {_TEXT_PRI};
-    font-family: 'Segoe UI', 'SF Pro Display', 'Helvetica Neue', sans-serif;
+    font-family: 'Segoe UI Variable', 'Segoe UI', 'Bahnschrift', 'Tahoma', sans-serif;
     font-size: {FONT_SIZE_BODY}px;
 }}
 
@@ -112,24 +114,21 @@ QPushButton, QToolButton, QCheckBox, QRadioButton {{
 def _button_styles() -> str:
     return f"""
 QPushButton {{
-    background: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0,
-        stop:0 {_ACCENT_GRAD_START}, stop:1 {_ACCENT_GRAD_END});
+    background: {_ACCENT_GRAD_END};
     color: {_TEXT_ON_ACCENT};
     border: {SPACE_XXXS}px solid {_ACCENT_BORDER};
-    border-radius: {RADIUS_LG}px;
+    border-radius: {RADIUS_MD}px;
     padding: 0 {SPACE_20}px;
     font-weight: {FONT_WEIGHT_BOLD};
     font-size: {FONT_SIZE_BODY}px;
     min-height: {SIZE_CONTROL_MD}px;
 }}
 QPushButton:hover {{
-    background: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0,
-        stop:0 {_ACCENT_GRAD_HOVER_START}, stop:1 {_ACCENT_GRAD_HOVER_END});
+    background: {_ACCENT_GRAD_HOVER_END};
     border-color: {_ACCENT_SUB};
 }}
 QPushButton:pressed {{
-    background: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0,
-        stop:0 {_ACCENT_GRAD_PRESSED_START}, stop:1 {_ACCENT_GRAD_PRESSED_END});
+    background: {_ACCENT_GRAD_PRESSED_END};
     border-color: {_ACCENT_GRAD_END};
 }}
 QPushButton:disabled {{
@@ -139,18 +138,15 @@ QPushButton:disabled {{
 }}
 
 QPushButton[class="danger"] {{
-    background: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0,
-        stop:0 {_DANGER_GRAD_START}, stop:1 {_DANGER_GRAD_END});
+    background: {_DANGER_GRAD_END};
     border: {SPACE_XXXS}px solid {_DANGER_DIM};
     color: {_TEXT_ON_ACCENT};
 }}
 QPushButton[class="danger"]:hover {{
-    background: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0,
-        stop:0 {_DANGER_GRAD_HOVER_START}, stop:1 {_DANGER_GRAD_HOVER_END});
+    background: {_DANGER_GRAD_HOVER_END};
 }}
 QPushButton[class="danger"]:pressed {{
-    background: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0,
-        stop:0 {_DANGER_GRAD_PRESSED_START}, stop:1 {_DANGER_GRAD_PRESSED_END});
+    background: {_DANGER_GRAD_PRESSED_END};
 }}
 
 QPushButton[class="secondary"] {{
@@ -184,7 +180,6 @@ QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{
     background-color: transparent;
 }}
 QLineEdit:hover, QTextEdit:hover {{
-    /* no change - frameless */
 }}
 QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled,
 QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {{
@@ -195,6 +190,8 @@ QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {{
 
 
 def _spin_combo_styles() -> str:
+    arrow_up = themed_icon_path("frontend/assets/icons/arrow_up.png")
+    arrow_down = themed_icon_path("frontend/assets/icons/arrow_down.png")
     return f"""
 QSpinBox, QDoubleSpinBox {{
     background-color: transparent;
@@ -222,50 +219,67 @@ QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {{
     background: {_ACCENT_HI_BG_12};
 }}
 QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
-    image: url(frontend/assets/icons/arrow_up.png);
+    image: url({arrow_up});
     width: {SIZE_ICON_10}px; height: {SIZE_ICON_10}px;
 }}
 QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
-    image: url(frontend/assets/icons/arrow_down.png);
+    image: url({arrow_down});
     width: {SIZE_ICON_10}px; height: {SIZE_ICON_10}px;
 }}
 
 QComboBox {{
-    background-color: transparent;
-    border: none;
-    border-radius: {RADIUS_NONE}px;
+    background-color: {_BG_BASE};
+    border: {SPACE_XXXS}px solid {_BORDER_DARK};
+    border-radius: {RADIUS_MD}px;
     padding: {SPACE_6}px {SPACE_34}px {SPACE_6}px {SPACE_MD}px;
     color: {_TEXT_PRI};
     min-height: {SIZE_SECTION_H}px;
+    combobox-popup: 0;
 }}
-QComboBox:hover {{ }}
-QComboBox:focus {{ }}
+QComboBox:hover {{ border-color: {_ACCENT_HI_BG_12}; }}
+QComboBox:focus {{ border-color: {_ACCENT_HI}; }}
 QComboBox::drop-down {{
     border: none;
+    border-left: {SPACE_XXXS}px solid {_BORDER_DARK};
     background: transparent;
     width: {SPACE_20}px;
+    border-top-right-radius: {RADIUS_MD}px;
+    border-bottom-right-radius: {RADIUS_MD}px;
 }}
 QComboBox::down-arrow {{
-    image: url(frontend/assets/icons/arrow_down.png);
+    image: url({arrow_down});
     width: {SIZE_ICON_12}px;
     height: {SIZE_ICON_12}px;
 }}
 QComboBox QAbstractItemView {{
-    background-color: {_BG_OVERLAY};
-    border: {SPACE_XXXS}px solid {_BORDER};
+    background-color: {_BG_SURFACE};
+    border: {SPACE_XXXS}px solid {_BORDER_DARK};
+    border-radius: {RADIUS_NONE}px;
     color: {_TEXT_PRI};
-    selection-background-color: {_ACCENT_BG_22};
+    selection-background-color: {_ACCENT_HI_BG_12};
     selection-color: {_TEXT_PRI};
-    padding: {SPACE_XS}px;
+    padding: 0;
+    margin: 0;
     outline: none;
+}}
+QComboBox QListView {{
+    border-radius: {RADIUS_NONE}px;
+}}
+QComboBox QAbstractItemView::viewport {{
+    border-radius: {RADIUS_NONE}px;
 }}
 QComboBox QAbstractItemView::item {{
     padding: {SPACE_6}px {SPACE_MD}px;
-    border-radius: {RADIUS_5}px;
+    border-radius: {RADIUS_NONE}px;
     min-height: {SIZE_ITEM_SM}px;
 }}
+QComboBox QAbstractItemView::item:selected {{
+    background: {_ACCENT_HI_BG_12};
+    border-radius: {RADIUS_NONE}px;
+}}
 QComboBox QAbstractItemView::item:hover {{
-    background: {_ACCENT_HI_BG_10};
+    background: {_ACCENT_HI_BG_12};
+    border-radius: {RADIUS_NONE}px;
 }}
 """
 
@@ -278,8 +292,7 @@ QSlider::groove:horizontal {{
     border-radius: {RADIUS_3}px;
 }}
 QSlider::handle:horizontal {{
-    background: qradialgradient(cx:0.5, cy:0.5, radius:0.5,
-        stop:0 {_ACCENT_HI}, stop:1 {_ACCENT_GRAD_END});
+    background: {_ACCENT_GRAD_END};
     border: {SPACE_XXS}px solid {_ACCENT_GRAD_END};
     width: {SIZE_CONTROL_18}px;
     height: {SIZE_CONTROL_18}px;
@@ -287,14 +300,14 @@ QSlider::handle:horizontal {{
     border-radius: {RADIUS_9}px;
 }}
 QSlider::sub-page:horizontal {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 {_ACCENT_GRAD_END}, stop:1 {_ACCENT_SUB});
+    background: {_ACCENT_GRAD_END};
     border-radius: {RADIUS_3}px;
 }}
 """
 
 
 def _checkbox_styles() -> str:
+    checkmark = themed_icon_path("frontend/assets/icons/checkmark.png")
     return f"""
 QCheckBox {{
     spacing: {SPACE_SM}px;
@@ -312,7 +325,7 @@ QCheckBox::indicator:hover {{ border-color: {_TEXT_DIM}; }}
 QCheckBox::indicator:checked {{
     background: {_ACCENT_GRAD_START};
     border-color: {_ACCENT_GRAD_END};
-    image: url(frontend/assets/icons/checkmark.png);
+    image: url({checkmark});
 }}
 """
 
@@ -322,7 +335,7 @@ def _tab_styles() -> str:
 QTabWidget::pane {{
     background-color: {_BG_SURFACE};
     border: {SPACE_XXXS}px solid {_BORDER_DIM};
-    border-radius: {RADIUS_LG}px;
+    border-radius: {RADIUS_MD}px;
     top: -{SPACE_XXXS}px;
 }}
 QTabBar {{
@@ -356,7 +369,7 @@ QTableWidget, QTableView {{
     background-color: {_BG_SURFACE};
     alternate-background-color: {_BG_SIDEBAR_END};
     border: {SPACE_XXXS}px solid {_BORDER_DIM};
-    border-radius: {RADIUS_LG}px;
+    border-radius: {RADIUS_MD}px;
     gridline-color: {_BG_OVERLAY};
     color: {_TEXT_PRI};
     selection-background-color: {_ACCENT_BG_12};
@@ -373,8 +386,7 @@ QTableWidget::item:selected, QTableView::item:selected {{
     color: {_TEXT_PRI};
 }}
 QHeaderView::section {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 {_BG_OVERLAY}, stop:1 {_BG_RAISED});
+    background: {_BG_OVERLAY};
     color: {_TEXT_DIM};
     border: none;
     border: none;
@@ -410,13 +422,13 @@ QScrollBar::groove:vertical {{
     border-radius: {RADIUS_6}px;
 }}
 QScrollBar::handle:vertical {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {_ACCENT_HI_BG_28}, stop:1 {_ACCENT_BG_18});
+    background: {_ACCENT_BG_18};
     border-radius: {RADIUS_6}px;
     min-height: {SPACE_28}px;
     border: {SPACE_XXXS}px solid {_WHITE_03};
 }}
 QScrollBar::handle:vertical:hover {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {_ACCENT_HI_BG_45}, stop:1 {_ACCENT_BG_30});
+    background: {_ACCENT_BG_30};
 }}
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
@@ -431,13 +443,13 @@ QScrollBar::groove:horizontal {{
     border-radius: {RADIUS_6}px;
 }}
 QScrollBar::handle:horizontal {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {_ACCENT_HI_BG_28}, stop:1 {_ACCENT_BG_18});
+    background: {_ACCENT_BG_18};
     border-radius: {RADIUS_6}px;
     min-width: {SPACE_28}px;
     border: {SPACE_XXXS}px solid {_WHITE_03};
 }}
 QScrollBar::handle:horizontal:hover {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {_ACCENT_HI_BG_45}, stop:1 {_ACCENT_BG_30});
+    background: {_ACCENT_BG_30};
 }}
 QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: transparent; }}
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
@@ -449,7 +461,7 @@ def _groupbox_styles() -> str:
 QGroupBox {{
     background-color: {_BG_RAISED};
     border: {SPACE_XXXS}px solid {_BORDER_DIM};
-    border-radius: {RADIUS_XL}px;
+    border-radius: {RADIUS_MD}px;
     margin-top: {SPACE_18}px;
     padding-top: {SPACE_22}px;
     font-weight: {FONT_WEIGHT_BOLD};
@@ -476,8 +488,7 @@ QProgressBar {{
     color: transparent;
 }}
 QProgressBar::chunk {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 {_ACCENT_GRAD_END}, stop:1 {_ACCENT_SUB});
+    background: {_ACCENT_GRAD_END};
     border-radius: {RADIUS_SM}px;
 }}
 """
@@ -488,7 +499,7 @@ def _dialog_styles() -> str:
 QDialog {{
     background-color: {_BG_RAISED};
     border: {SPACE_XXXS}px solid {_BORDER};
-    border-radius: {RADIUS_XL}px;
+    border-radius: {RADIUS_MD}px;
 }}
 """
 
@@ -496,10 +507,9 @@ QDialog {{
 def _card_styles() -> str:
     return f"""
 QFrame[class="card"] {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 {_BG_OVERLAY}, stop:1 {_BG_RAISED});
+    background: {_BG_RAISED};
     border: {SPACE_XXXS}px solid {_BORDER_DIM};
-    border-radius: {RADIUS_XL}px;
+    border-radius: {RADIUS_MD}px;
 }}
 """
 
@@ -509,7 +519,7 @@ def _menu_styles() -> str:
 QMenu {{
     background-color: {_BG_OVERLAY};
     border: {SPACE_XXXS}px solid {_BORDER};
-    border-radius: {RADIUS_LG}px;
+    border-radius: {RADIUS_MD}px;
     padding: {SPACE_XS}px;
     color: {_TEXT_PRI};
 }}
@@ -518,8 +528,7 @@ QMenu::item {{
     border-radius: {RADIUS_6}px;
 }}
 QMenu::item:selected {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 {_ACCENT_GRAD_END}, stop:1 {_ACCENT_SUB});
+    background: {_ACCENT_GRAD_END};
     color: {_TEXT_ON_ACCENT};
 }}
 QMenu::separator {{
@@ -561,9 +570,7 @@ QDateEdit:focus, QTimeEdit:focus, QDateTimeEdit:focus {{
 def _splitter_styles() -> str:
     return f"""
 QSplitter::handle {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 transparent, stop:0.4 {_BORDER_DIM},
-        stop:0.6 {_BORDER_DIM}, stop:1 transparent);
+    background: {_BORDER_DIM};
 }}
 QSplitter::handle:vertical  {{ height: {SPACE_3}px; }}
 QSplitter::handle:horizontal {{ width: {SPACE_3}px; }}
@@ -616,8 +623,7 @@ def build_dark_theme() -> str:
 def build_sidebar_dark() -> str:
     return f"""
 QFrame#sidebar {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 {_BG_DARKEST}, stop:1 {_BG_SIDEBAR_END});
+    background: {_BG_DARKEST};
     border-right: {SPACE_XXXS}px solid {_BG_OVERLAY};
 }}
 QLabel#sidebar-logo {{
@@ -655,14 +661,12 @@ QPushButton.nav-btn {{
     min-height: {SIZE_CONTROL_38}px;
 }}
 QPushButton.nav-btn:hover {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 {_BG_OVERLAY}, stop:1 transparent);
+    background: {_BG_OVERLAY};
     color: {_TEXT_SOFT};
     border-left: {SPACE_3}px solid {_BORDER_DARK};
 }}
 QPushButton.nav-btn[active="true"] {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 {_ACCENT_BG_15}, stop:1 transparent);
+    background: {_ACCENT_BG_15};
     color: {_ACCENT_HI};
     border-left: {SPACE_3}px solid {_ACCENT_GRAD_END};
     font-weight: {FONT_WEIGHT_SEMIBOLD};

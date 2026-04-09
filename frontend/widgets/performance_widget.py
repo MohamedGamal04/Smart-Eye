@@ -1,7 +1,8 @@
 import logging
+from collections import deque
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPaintEvent
+from PySide6.QtGui import QColor, QFont, QPainter, QPaintEvent
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -16,17 +17,13 @@ from frontend.styles._colors import (
     _BG_OVERLAY,
     _BG_RAISED,
     _BORDER,
+    _BORDER_DIM,
     _TEXT_PRI,
     _TEXT_SEC,
     _TEXT_MUTED,
     _ACCENT,
-    _ACCENT_ALT_BG_12,
     _ACCENT_HI,
-    _SUCCESS,
-    _SUCCESS_DIM,
     _WARNING,
-    _WARNING_DIM,
-    _WARNING_ALT,
     _DANGER,
 )
 from frontend.ui_tokens import (
@@ -34,7 +31,7 @@ from frontend.ui_tokens import (
     FONT_SIZE_LABEL,
     FONT_WEIGHT_BOLD,
     FONT_WEIGHT_SEMIBOLD,
-    RADIUS_XL,
+    RADIUS_MD,
     SPACE_6,
     SPACE_SM,
     SPACE_10,
@@ -52,17 +49,20 @@ logger = logging.getLogger(__name__)
 
 
 class AnimatedBar(QWidget):
-    def __init__(self, color_a: str, color_b: str, parent=None):
+    def __init__(self, color: str, parent=None):
         super().__init__(parent)
         self._value = 0.0
         self._target = 0.0
-        self._color_a = QColor(color_a)
-        self._color_b = QColor(color_b)
+        self._fill_color = QColor(color)
         self.setFixedHeight(SPACE_6)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._timer = QTimer(self)
         self._timer.setInterval(16)
         self._timer.timeout.connect(self._step)
+
+    def set_fill_color(self, color: str):
+        self._fill_color = QColor(color)
+        self.update()
 
     def set_value(self, v: float):
         self._target = max(0.0, min(100.0, v))
@@ -83,20 +83,17 @@ class AnimatedBar(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h, r = self.width(), self.height(), self.height() / 2
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(_BG_OVERLAY))
+        p.setBrush(QColor(_BORDER_DIM))
         p.drawRoundedRect(0, 0, w, h, r, r)
         fw = int(w * self._value / 100)
         if fw > r * 2:
-            g = QLinearGradient(0, 0, fw, 0)
-            g.setColorAt(0.0, self._color_a)
-            g.setColorAt(1.0, self._color_b)
-            p.setBrush(g)
+            p.setBrush(self._fill_color)
             p.drawRoundedRect(0, 0, fw, h, r, r)
         p.end()
 
 
 class MetricRow(QWidget):
-    def __init__(self, name: str, color_a: str, color_b: str, parent=None):
+    def __init__(self, name: str, parent=None):
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -108,13 +105,13 @@ class MetricRow(QWidget):
             text_style(
                 _TEXT_MUTED,
                 size=FONT_SIZE_CAPTION,
-                weight=FONT_WEIGHT_BOLD,
+                weight=FONT_WEIGHT_SEMIBOLD,
                 extra="letter-spacing: 0.{}px; {}".format(SPACE_6, transparent_surface_style()),
             )
         )
         layout.addWidget(lbl)
 
-        self._bar = AnimatedBar(color_a, color_b)
+        self._bar = AnimatedBar(_ACCENT_HI)
         layout.addWidget(self._bar)
 
         self._pct = QLabel("0%")
@@ -128,10 +125,13 @@ class MetricRow(QWidget):
         self._pct.setText(f"{value:.0f}%")
         if value >= 85:
             color = _DANGER
+            self._bar.set_fill_color(_DANGER)
         elif value >= 65:
             color = _WARNING
+            self._bar.set_fill_color(_WARNING)
         else:
             color = _TEXT_SEC
+            self._bar.set_fill_color(_ACCENT_HI)
         self._pct.setStyleSheet(text_style(color, size=FONT_SIZE_CAPTION, weight=FONT_WEIGHT_SEMIBOLD, extra=transparent_surface_style()))
 
 
@@ -159,8 +159,8 @@ class PerformanceWidget(QFrame):
             bg=_BG_RAISED,
             border_w=SPACE_XXXS,
             border=_BORDER,
-            radius=RADIUS_XL,
-            hover_border=_ACCENT_ALT_BG_12,
+            radius=RADIUS_MD,
+            hover_border=_BORDER_DIM,
         ))
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFixedHeight(SIZE_PANEL_H_LG)
@@ -184,31 +184,33 @@ class PerformanceWidget(QFrame):
         root.addLayout(header)
         root.addSpacing(SPACE_6)
 
-        self._inference_label = QLabel("Inference  —")
+        self._inference_label = QLabel("Inference latency  —")
         self._inference_label.setTextFormat(Qt.TextFormat.RichText)
-        self._inference_label.setStyleSheet(muted_label_style(size=FONT_SIZE_CAPTION))
+        self._inference_label.setStyleSheet(muted_label_style(color=_TEXT_MUTED, size=FONT_SIZE_CAPTION, weight=FONT_WEIGHT_SEMIBOLD))
         root.addWidget(self._inference_label)
 
         root.addSpacing(SPACE_MD)
         root.addWidget(_Divider())
         root.addSpacing(SPACE_MD)
 
-        self._cpu = MetricRow("CPU", _SUCCESS_DIM, _SUCCESS)
+        self._cpu = MetricRow("CPU")
         root.addWidget(self._cpu)
         root.addSpacing(SPACE_10)
 
-        self._ram = MetricRow("RAM", _ACCENT, _ACCENT_HI)
+        self._ram = MetricRow("RAM")
         root.addWidget(self._ram)
         root.addSpacing(SPACE_10)
 
-        self._gpu = MetricRow("GPU", _WARNING_DIM, _WARNING_ALT)
+        self._gpu = MetricRow("GPU")
         root.addWidget(self._gpu)
         root.addSpacing(SPACE_SM)
 
         self._ram_total = self._get_ram_total()
-        self._providers = QLabel("Face recognition: --\nObject detection: --\nRAM: --")
+        self._face_ms_samples = deque(maxlen=24)
+        self._obj_ms_samples = deque(maxlen=24)
+        self._providers = QLabel("Face model: --\nObject model: --\nInstalled RAM: --")
         self._providers.setWordWrap(True)
-        self._providers.setStyleSheet(muted_label_style(size=FONT_SIZE_CAPTION))
+        self._providers.setStyleSheet(muted_label_style(color=_TEXT_MUTED, size=FONT_SIZE_CAPTION))
         root.addSpacing(SPACE_6)
         root.addWidget(self._providers)
 
@@ -233,32 +235,52 @@ class PerformanceWidget(QFrame):
             logger.debug("Failed to refresh performance metrics", exc_info=True)
 
     def update_inference(self, face_ms: float, obj_ms: float):
+        try:
+            face_val = max(0.0, float(face_ms or 0.0))
+        except Exception:
+            face_val = 0.0
+        try:
+            obj_val = max(0.0, float(obj_ms or 0.0))
+        except Exception:
+            obj_val = 0.0
+
+        self._face_ms_samples.append(face_val)
+        self._obj_ms_samples.append(obj_val)
+        face_avg = (sum(self._face_ms_samples) / len(self._face_ms_samples)) if self._face_ms_samples else face_val
+        obj_avg = (sum(self._obj_ms_samples) / len(self._obj_ms_samples)) if self._obj_ms_samples else obj_val
+
         self._inference_label.setText(
             f"<span style='color:{_TEXT_MUTED}'>Face</span> "
-            f"<span style='color:{_TEXT_SEC}; font-weight:{FONT_WEIGHT_SEMIBOLD}'>{face_ms:.0f}ms</span>"
-            f"<span style='color:{_TEXT_MUTED}'>&nbsp;·&nbsp;Obj</span> "
-            f"<span style='color:{_TEXT_SEC}; font-weight:{FONT_WEIGHT_SEMIBOLD}'>{obj_ms:.0f}ms</span>"
+            f"<span style='color:{_TEXT_SEC}; font-weight:{FONT_WEIGHT_SEMIBOLD}'>{face_avg:.1f}ms</span>"
+            f"<span style='color:{_TEXT_MUTED}'>&nbsp;|&nbsp;Object</span> "
+            f"<span style='color:{_TEXT_SEC}; font-weight:{FONT_WEIGHT_SEMIBOLD}'>{obj_avg:.1f}ms</span>"
         )
 
     def update_providers(self, items, gpu_name: str = "", cpu_name: str = "", cpu_name_long: str = ""):
-        face_line = "Face recognition: --"
-        obj_line = "Object detection: --"
+        face_line = "Face model: --"
+        obj_line = "Object model: --"
         ram_line = f"Installed RAM: {self._ram_total}"
         cpu_label = cpu_name or "CPU"
         cpu_long = cpu_name_long or cpu_label
         gpu_label = gpu_name or "GPU"
 
         for ent in items:
-            prov = (ent.get("provider") or "").lower()
-            target = f"{'GPU' if 'dml' in prov or 'cuda' in prov or 'gpu' in prov else 'CPU'}"
-            if "gpu" in target.lower():
+            prov_raw = str(ent.get("provider") or "")
+            prov_items = [p.strip().lower() for p in prov_raw.split(",") if p.strip()]
+            primary = prov_items[0] if prov_items else prov_raw.lower()
+            has_gpu = any(any(k in tok for k in ("dml", "cuda", "rocm", "openvino", "coreml", "gpu")) for tok in prov_items)
+            has_cpu = any("cpu" in tok for tok in prov_items)
+
+            if has_gpu and has_cpu:
+                branded = "Hybrid (GPU preferred, CPU fallback)"
+            elif has_gpu:
                 branded = f"GPU ({gpu_label})"
             else:
                 branded = f"CPU ({cpu_long})"
             if ent.get("type") == "face":
-                face_line = f"Face recognition: {branded}"
+                face_line = f"Face model: {branded}"
             else:
-                obj_line = f"Object detection: {branded}"
+                obj_line = f"Object model: {branded}"
 
         self._providers.setText(face_line + "\n" + obj_line + "\n" + ram_line)
 
