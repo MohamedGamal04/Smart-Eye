@@ -138,14 +138,32 @@ def _detect_providers() -> list[str]:
     try:
         import onnxruntime as ort
 
-        ort.get_available_providers()
+        avail = ort.get_available_providers() or []
     except Exception:
         _cached_providers = ["CPUExecutionProvider"]
         _logger.info("Cached providers=%s", _cached_providers)
         return _cached_providers
 
-    _cached_providers = ["CPUExecutionProvider"]
-    _logger.info("Cached providers=%s (forced CPU)", _cached_providers)
+    use_gpu = False
+    with contextlib.suppress(Exception):
+        use_gpu = bool(config.gpu_enabled())
+
+    providers = []
+    if use_gpu:
+        # Prefer common GPU providers first, then always keep CPU fallback.
+        for p in (
+            "CUDAExecutionProvider",
+            "DmlExecutionProvider",
+            "ROCMExecutionProvider",
+            "CoreMLExecutionProvider",
+            "OpenVINOExecutionProvider",
+        ):
+            if p in avail:
+                providers.append(p)
+
+    providers.append("CPUExecutionProvider")
+    _cached_providers = providers
+    _logger.info("Cached providers=%s | available=%s | gpu_enabled=%s", _cached_providers, avail, use_gpu)
     return _cached_providers
 
 

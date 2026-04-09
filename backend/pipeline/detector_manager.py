@@ -438,9 +438,19 @@ class DetectorManager:
     def _run_face_detection(self, camera_id, small, scale):
         t0 = time.time()
         faces = self._face_model.detect_faces(small)
+        try:
+            min_face_size = int(config.get("min_face_size", 40) or 40)
+        except Exception:
+            min_face_size = 40
         results = []
         for face in faces:
             face["bbox"] = _scale_bbox_up(face["bbox"], scale)
+            try:
+                x1, y1, x2, y2 = face["bbox"]
+                if (x2 - x1) < min_face_size or (y2 - y1) < min_face_size:
+                    continue
+            except Exception:
+                continue
             results.append(
                 {
                     "bbox": face["bbox"],
@@ -569,12 +579,13 @@ class DetectorManager:
     def _identify_faces(self, camera_id, faces, existing_trackers, aggressive_mode, max_identify, small, frame_idx):
         identifies_used = 0
         identify_cooldown = max(1, int(self._identify_cooldown or 1))
+        existing_face_trackers = [ent for ent in existing_trackers if ent.get("type") == "face"]
         for f in faces:
             if f.get("identity"):
                 continue
 
             best, best_iou, best_rel, best_score = None, 0.0, 999.0, -1e9
-            for ent in existing_trackers:
+            for ent in existing_face_trackers:
                 eb = ent.get("bbox")
                 fb = f.get("bbox")
                 if not eb or not fb:
@@ -1097,10 +1108,25 @@ class DetectorManager:
         return [o for o in objects if o.get("plugin_id") in allowed_pids]
 
     def _identify_faces_for_frame(self, camera_id, faces, aggressive_mode, max_identify, small, frame_idx):
+        try:
+            max_faces_identify = int(config.get("max_faces_identify_per_frame", 16) or 16)
+        except Exception:
+            max_faces_identify = 16
+        max_faces_identify = max(1, max_faces_identify)
+
+        faces_for_identify = faces
+        if len(faces) > max_faces_identify:
+            ranked_idx = sorted(
+                range(len(faces)),
+                key=lambda i: float(faces[i].get("det_score", 0.0) or 0.0),
+                reverse=True,
+            )
+            faces_for_identify = [faces[i] for i in ranked_idx[:max_faces_identify]]
+
         state = self._get_camera_state(camera_id)
         with state.trackers_lock:
             existing_trackers = list(state.trackers)
-        self._identify_faces(camera_id, faces, existing_trackers, aggressive_mode, max_identify, small, frame_idx)
+        self._identify_faces(camera_id, faces_for_identify, existing_trackers, aggressive_mode, max_identify, small, frame_idx)
 
     def _is_face_enabled(self, camera_id):
         try:
