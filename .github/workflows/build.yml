@@ -2,6 +2,9 @@ name: Build SmartEye
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
   build:
@@ -46,6 +49,14 @@ jobs:
         run: |
           pip install --upgrade setuptools
           pip show setuptools
+
+      - name: Cache Nuitka build cache
+        uses: actions/cache@v4
+        with:
+          path: C:/Users/runneradmin/AppData/Local/Nuitka/Nuitka
+          key: nuitka-${{ runner.os }}-${{ hashFiles('requirements.txt', 'main.py') }}
+          restore-keys: |
+            nuitka-${{ runner.os }}-
 
       - name: Check for model bundle
         id: check_models
@@ -132,6 +143,24 @@ jobs:
             pkg_resources
             pip
             doctest
+            scipy.stats
+            scipy.optimize
+            scipy.signal
+            scipy.linalg
+            scipy.sparse
+            scipy.sparse.linalg
+            scipy.sparse.csgraph
+            scipy.interpolate
+            scipy.integrate
+            scipy.fft
+            scipy.ndimage
+            scipy.io
+            scipy.io.matlab
+            scipy.io.wavfile
+            scipy.cluster
+            scipy.odr
+            scipy.special
+            scipy.misc
           noinclude-data-files: |
             qt6webenginecore.dll
             qt6webenginequick.dll
@@ -250,7 +279,6 @@ jobs:
           Write-Host "Installer created successfully!"
 
       - name: Collect release files
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         id: release_files
         shell: pwsh
         run: |
@@ -264,13 +292,12 @@ jobs:
             throw "Installer not found at $installerPath"
           }
 
-          "app_name=$appName"          | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "app_version=$appVersion"    | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "app_build=$appBuild"        | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "app_name=$appName"             | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "app_version=$appVersion"       | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "app_build=$appBuild"           | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "installer_path=$installerPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Create or update release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
