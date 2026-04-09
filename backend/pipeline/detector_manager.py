@@ -135,7 +135,26 @@ class DetectorManager:
         else:
             workers = max(1, min(2, (os.cpu_count() or 2) // 2))
 
+        self._executor_workers = workers
+        self._executor_lock = threading.Lock()
         self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="det-worker")
+
+    def _recreate_executor(self):
+        with self._executor_lock:
+            self._executor = ThreadPoolExecutor(max_workers=self._executor_workers, thread_name_prefix="det-worker")
+
+    def _submit_executor_task(self, fn, *args):
+        with self._executor_lock:
+            executor = self._executor
+        try:
+            return executor.submit(fn, *args)
+        except RuntimeError as exc:
+            if "cannot schedule new futures after shutdown" not in str(exc):
+                raise
+            logger.warning("Detector executor was shut down unexpectedly; recreating it", exc_info=True)
+            self._recreate_executor()
+            with self._executor_lock:
+                return self._executor.submit(fn, *args)
 
     class _CameraState:
         def __init__(self):
@@ -418,12 +437,12 @@ class DetectorManager:
     def _submit_inference_futures(self, camera_id, small, scale, plugin_ids, face_enabled):
         futures = {}
         if face_enabled and self._face_model and self._face_model.is_loaded:
-            futures["faces"] = self._executor.submit(self._run_face_detection, camera_id, small, scale)
+            futures["faces"] = self._submit_executor_task(self._run_face_detection, camera_id, small, scale)
         for pid in plugin_ids:
             with self._plugin_models_lock:
                 entry = self._plugin_models.get(pid)
             if entry and entry["model"].is_loaded:
-                futures[f"obj_{pid}"] = self._executor.submit(self._run_plugin, pid, small, scale, camera_id)
+                futures[f"obj_{pid}"] = self._submit_executor_task(self._run_plugin, pid, small, scale, camera_id)
         return futures
 
     def _collect_futures(self, futures):
