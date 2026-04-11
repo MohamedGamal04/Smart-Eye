@@ -4,6 +4,8 @@ import logging
 import os
 import sqlite3
 import contextlib
+import json
+import ast
 from datetime import datetime
 
 import cv2
@@ -12,6 +14,7 @@ from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
+    QFrame,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -24,6 +27,8 @@ from PySide6.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QDateEdit,
+    QCheckBox,
+    QScrollArea,
     QWidget,
 )
 
@@ -41,8 +46,6 @@ from frontend.styles._colors import (
     _ACCENT_BG_18,
     _ACCENT_HI,
     _ACCENT_HI_BG_07,
-    _ACCENT_HI_BG_22,
-    _ACCENT_HI_BG_45,
     _BG_BASE,
     _BG_OVERLAY,
     _BG_SURFACE,
@@ -63,6 +66,7 @@ from frontend.styles.page_styles import (
     header_bar_style,
     muted_label_style,
     neutral_badge_style,
+    saved_clips_scrollbar_style,
     section_kicker_style,
     text_style,
     toolbar_style,
@@ -77,7 +81,6 @@ from frontend.ui_tokens import (
     FONT_SIZE_MICRO,
     FONT_WEIGHT_BOLD,
     RADIUS_11,
-    RADIUS_3,
     RADIUS_6,
     RADIUS_LG,
     RADIUS_MD,
@@ -148,12 +151,7 @@ QPushButton#clip_delete {{
 QPushButton#clip_delete:hover {{
     background: transparent;
 }}
-QScrollBar:vertical {{ border: none; background: transparent; width: {SPACE_6}px; margin: {SPACE_XXS}px 0; }}
-    QScrollBar::handle:vertical {{
-        background: {_ACCENT_HI_BG_22}; min-height: {SIZE_CONTROL_SM}px; border-radius: {RADIUS_3}px;
-    }}
-QScrollBar::handle:vertical:hover {{ background: {_ACCENT_HI_BG_45}; }}
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+{saved_clips_scrollbar_style()}
 """
 )
 
@@ -214,6 +212,11 @@ class PlaybackPage(QWidget):
         self._clip_filter_to = None
         self._clip_filters_dialog: QDialog | None = None
         self._filters_btn: QToolButton | None = None
+        self._face_detect_toggle: ToggleSwitch | None = None
+        self._class_filters_btn: QPushButton | None = None
+        self._class_filter_dialog: QDialog | None = None
+        self._class_filter_checks: dict[str, QCheckBox] = {}
+        self._disabled_playback_classes: set[str] = set()
         self._build_ui()
         self._load_rule_cameras()
 
@@ -288,6 +291,23 @@ class PlaybackPage(QWidget):
         self._detect_toggle.setToolTip("Enable detection overlay during playback")
         self._detect_toggle.toggled.connect(self._on_detection_toggled)
         tl.addWidget(self._detect_toggle)
+
+        face_lbl = QLabel("Face")
+        face_lbl.setStyleSheet(
+            f"color: {_TEXT_MUTED}; font-size: {FONT_SIZE_CAPTION}px; font-weight: {FONT_WEIGHT_BOLD}; letter-spacing: 0.{SPACE_XS}px;"
+        )
+        tl.addWidget(face_lbl)
+        self._face_detect_toggle = ToggleSwitch()
+        self._face_detect_toggle.setToolTip("Enable face recognition during playback detection")
+        self._face_detect_toggle.toggled.connect(self._on_face_detection_toggled)
+        tl.addWidget(self._face_detect_toggle)
+
+        self._class_filters_btn = QPushButton("Object Classes")
+        self._class_filters_btn.setFixedHeight(SIZE_CONTROL_MD)
+        self._class_filters_btn.setStyleSheet(_SECONDARY_BTN)
+        self._class_filters_btn.setToolTip("Choose object classes to exclude from playback detection")
+        self._class_filters_btn.clicked.connect(self._open_class_filters_dialog)
+        tl.addWidget(self._class_filters_btn)
 
         _sep2 = QWidget()
         _sep2.setFixedSize(SPACE_XXXS, SPACE_XL)
@@ -620,10 +640,50 @@ QSlider::handle:horizontal {{
             db.set_setting("playback_detection_enabled", bool(state))
         except (sqlite3.Error, OSError, ValueError):
             logger.warning("Failed to persist playback detection setting", exc_info=True)
+        if not state and self._record_toggle and self._record_toggle.isChecked():
+            self._record_toggle.setChecked(False)
         if self._playback_thread:
             self._playback_thread.set_detection_enabled(state)
+            self._playback_thread.set_record_enabled(self._record_toggle.isChecked())
+            self._apply_playback_detection_filters()
+
+    def _on_face_detection_toggled(self, state: bool) -> None:
+        try:
+            db.set_setting("playback_face_detection_enabled", bool(state))
+        except (sqlite3.Error, OSError, ValueError):
+            logger.warning("Failed to persist playback face detection setting", exc_info=True)
+        if self._playback_thread:
+            self._playback_thread.set_face_detection_enabled(state)
+
+    @staticmethod
+    def _normalize_class_name(value: str) -> str:
+        return str(value or "").strip().lower()
+
+    def _current_disabled_object_classes(self) -> set[str]:
+        out = set()
+        for cls_name, cb in self._class_filter_checks.items():
+            if not cb.isChecked():
+                norm = self._normalize_class_name(cls_name)
+                if norm:
+                    out.add(norm)
+        return out
+
+    def _persist_class_filter_settings(self) -> None:
+        self._disabled_playback_classes = self._current_disabled_object_classes()
+        try:
+            db.set_setting("playback_disabled_object_classes", json.dumps(sorted(self._disabled_playback_classes)))
+        except (sqlite3.Error, OSError, ValueError):
+            logger.warning("Failed to persist playback class filters", exc_info=True)
+
+    def _apply_playback_detection_filters(self) -> None:
+        if not self._playback_thread:
+            return
+        self._playback_thread.set_face_detection_enabled(self._face_detect_toggle.isChecked() if self._face_detect_toggle else True)
+        self._playback_thread.set_disabled_object_classes(self._disabled_playback_classes)
 
     def _on_record_toggled(self, state: bool) -> None:
+        if state and not self._detect_toggle.isChecked():
+            self._detect_toggle.setChecked(True)
         try:
             db.set_setting("playback_record_enabled", bool(state))
         except (sqlite3.Error, OSError, ValueError):
@@ -635,12 +695,26 @@ QSlider::handle:horizontal {{
         try:
             det = db.get_bool("playback_detection_enabled", False)
             rec = db.get_bool("playback_record_enabled", False)
+            face = db.get_bool("playback_face_detection_enabled", True)
+            raw_disabled = db.get_setting("playback_disabled_object_classes", [])
+            if isinstance(raw_disabled, str):
+                try:
+                    raw_disabled = json.loads(raw_disabled or "[]")
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    raw_disabled = ast.literal_eval(raw_disabled) if raw_disabled else []
+            self._disabled_playback_classes = {
+                self._normalize_class_name(v) for v in (raw_disabled or []) if self._normalize_class_name(v)
+            }
             self._detect_toggle.setChecked(bool(det))
             self._record_toggle.setChecked(bool(rec))
+            if self._face_detect_toggle:
+                self._face_detect_toggle.setChecked(bool(face))
         except (sqlite3.Error, OSError, ValueError):
             logger.warning("Failed to load playback toggle settings", exc_info=True)
             self._detect_toggle.setChecked(False)
             self._record_toggle.setChecked(False)
+            if self._face_detect_toggle:
+                self._face_detect_toggle.setChecked(True)
 
     def _on_event_clicked(self, item) -> None:
         idx = self._events_list.row(item)
@@ -761,6 +835,99 @@ QSlider::handle:horizontal {{
         path, _ = QFileDialog.getSaveFileName(self, "Save Snapshot", "snapshot.jpg", "JPEG (*.jpg);;PNG (*.png)")
         if path:
             cv2.imwrite(path, self._video_widget._last_frame)
+
+    def _ensure_class_filter_dialog(self) -> None:
+        if self._class_filter_dialog is not None:
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Object Detection Classes")
+        apply_popup_theme(dlg)
+        dlg.setModal(False)
+        dlg.setFixedWidth(420)
+
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(SPACE_LG, SPACE_MD, SPACE_LG, SPACE_MD)
+        layout.setSpacing(SPACE_SM)
+
+        hint = QLabel("Uncheck classes to disable them during playback detection.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(muted_label_style(size=FONT_SIZE_CAPTION))
+        layout.addWidget(hint)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        body = QWidget()
+        body_l = QVBoxLayout(body)
+        body_l.setContentsMargins(0, 0, 0, 0)
+        body_l.setSpacing(SPACE_XXS)
+        body_l.addStretch()
+        scroll.setWidget(body)
+        layout.addWidget(scroll, stretch=1)
+
+        row = QHBoxLayout()
+        row.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.setFixedHeight(SIZE_CONTROL_MD)
+        close_btn.setStyleSheet(_SECONDARY_BTN)
+        close_btn.clicked.connect(dlg.close)
+        row.addWidget(close_btn)
+        layout.addLayout(row)
+
+        self._class_filter_dialog = dlg
+        self._class_filter_checks = {}
+        self._class_filter_body_layout = body_l
+
+    def _load_playback_class_filters(self) -> None:
+        self._ensure_class_filter_dialog()
+        if self._class_filter_dialog is None:
+            return
+        lay = self._class_filter_body_layout
+        while lay.count() > 1:
+            item = lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        self._class_filter_checks.clear()
+
+        classes = []
+        try:
+            classes = db.get_plugin_classes(enabled_only=True) or []
+        except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
+            classes = []
+
+        names = sorted({str(c.get("class_name") or "").strip() for c in classes if str(c.get("class_name") or "").strip()})
+        if not names:
+            empty = QLabel("No detection classes available.")
+            empty.setStyleSheet(muted_label_style(size=FONT_SIZE_LABEL))
+            lay.insertWidget(0, empty)
+            return
+
+        for name in names:
+            cb = QCheckBox(name)
+            cb.setChecked(self._normalize_class_name(name) not in self._disabled_playback_classes)
+            cb.toggled.connect(self._on_class_filter_toggled)
+            lay.insertWidget(lay.count() - 1, cb)
+            self._class_filter_checks[name] = cb
+
+    def _on_class_filter_toggled(self, _checked: bool) -> None:
+        self._persist_class_filter_settings()
+        self._apply_playback_detection_filters()
+
+    def _open_class_filters_dialog(self) -> None:
+        self._load_playback_class_filters()
+        if not self._class_filter_dialog:
+            return
+        if self._class_filter_dialog.isVisible():
+            self._class_filter_dialog.raise_()
+            self._class_filter_dialog.activateWindow()
+            return
+        btn = self._class_filters_btn
+        if btn:
+            pos = btn.mapToGlobal(btn.rect().bottomLeft())
+            self._class_filter_dialog.move(pos.x(), pos.y() + SPACE_6)
+        self._class_filter_dialog.show()
 
     def _ensure_clip_filters_dialog(self) -> None:
         if self._clip_filters_dialog is not None:
@@ -1081,12 +1248,8 @@ QSlider::handle:horizontal {{
             cams = []
         for cam in cams:
             self._rule_combo.addItem(cam.get("name", f"Camera {cam.get('id')}"), int(cam.get("id")))
-        if cams:
-            self._rule_camera_id = int(cams[0].get("id"))
-            self._rule_combo.setCurrentIndex(1)
-        else:
-            self._rule_camera_id = -1
-            self._rule_combo.setCurrentIndex(0)
+        self._rule_camera_id = -1
+        self._rule_combo.setCurrentIndex(0)
 
     def _on_rule_camera_changed(self, idx: int) -> None:
         if idx < 0:
@@ -1101,6 +1264,7 @@ QSlider::handle:horizontal {{
         self._playback_thread = PlaybackThread(path, virtual_camera_id=self._rule_camera_id)
         self._playback_thread.set_detection_enabled(self._detect_toggle.isChecked())
         self._playback_thread.set_record_enabled(self._record_toggle.isChecked())
+        self._apply_playback_detection_filters()
         self._playback_thread.frame_ready.connect(self._on_frame)
         self._playback_thread.detection_event.connect(self._on_detection_event)
         self._playback_thread.playback_finished.connect(self._on_finished)

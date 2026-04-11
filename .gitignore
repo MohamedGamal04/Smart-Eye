@@ -21,6 +21,8 @@ Thumbs.db
 
 build/
 dist/
+site/
+docs/generated/exports/
 *.egg-info/
 *.spec
 
@@ -36,7 +38,6 @@ data/clips_live/*
 data/cache/*
 
 tests/
-docs/
 
 data/*.db-wal
 data/*.db-shm

@@ -139,10 +139,12 @@ CREATE TABLE IF NOT EXISTS detection_logs (
     identity        TEXT,
     face_confidence REAL,
     detections      TEXT,
+    gender_norm     TEXT DEFAULT 'unknown',
     rules_triggered TEXT,
     alarm_level     INTEGER DEFAULT 0,
     snapshot_path   TEXT,
-    reviewed        INTEGER DEFAULT 0
+    reviewed        INTEGER DEFAULT 0,
+    has_identity    INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS notification_profiles (
@@ -218,7 +220,6 @@ INSERT OR IGNORE INTO app_settings VALUES ('ui_pause_inactive_tabs', '1', 'bool'
 INSERT OR IGNORE INTO app_settings VALUES ('ui_unload_on_leave', '1', 'bool', 'Unload heavy tabs on leave', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('ui_unload_idle_min', '5', 'int', 'Unload idle tabs after (min)', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('auto_pause_live_when_idle', '0', 'bool', 'Auto-stop live cameras when idle', 'performance');
-
 CREATE INDEX IF NOT EXISTS idx_detection_logs_timestamp ON detection_logs (timestamp);
 CREATE INDEX IF NOT EXISTS idx_detection_logs_camera_id ON detection_logs (camera_id);
 CREATE INDEX IF NOT EXISTS idx_known_faces_name ON known_faces (name);
