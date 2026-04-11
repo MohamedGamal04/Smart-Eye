@@ -144,26 +144,22 @@ def _detect_providers() -> list[str]:
         _logger.info("Cached providers=%s", _cached_providers)
         return _cached_providers
 
-    use_gpu = False
-    with contextlib.suppress(Exception):
-        use_gpu = bool(config.gpu_enabled())
-
     providers = []
-    if use_gpu:
+    for p in (
+        "CUDAExecutionProvider",
+        "DmlExecutionProvider",
+        "ROCMExecutionProvider",
+        "CoreMLExecutionProvider",
+        "OpenVINOExecutionProvider",
+    ):
+        if p in avail:
+            providers = [p]
+            break
 
-        for p in (
-            "CUDAExecutionProvider",
-            "DmlExecutionProvider",
-            "ROCMExecutionProvider",
-            "CoreMLExecutionProvider",
-            "OpenVINOExecutionProvider",
-        ):
-            if p in avail:
-                providers.append(p)
-
-    providers.append("CPUExecutionProvider")
+    if not providers:
+        providers = ["CPUExecutionProvider"]
     _cached_providers = providers
-    _logger.info("Cached providers=%s | available=%s | gpu_enabled=%s", _cached_providers, avail, use_gpu)
+    _logger.info("Cached providers=%s | available=%s", _cached_providers, avail)
     return _cached_providers
 
 
@@ -321,12 +317,6 @@ class FaceModel:
             except Exception:
                 _logger.warning("InsightFace GPU load failed, falling back to CPU", exc_info=True)
                 self._last_load_error = f"Preferred providers init failed:\n{traceback.format_exc()}"
-
-                try:
-                    global _cached_providers
-                    _cached_providers = ["CPUExecutionProvider"]
-                except Exception:
-                    pass
 
             try:
                 cpu_prov = ["CPUExecutionProvider"]

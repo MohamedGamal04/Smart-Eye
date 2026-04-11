@@ -31,24 +31,42 @@ class ONNXObjectModel:
         try:
             import onnxruntime as ort
 
-            from utils import config
-
             names_map = {}
             self._last_error = None
+            self._using_cpu_fallback = False
 
             if not os.path.isfile(self._weight_path):
                 raise MissingModelFile(f"Model file not found: {self._weight_path}")
 
-            providers: list[str] = ["CPUExecutionProvider"]
             try:
                 avail = ort.get_available_providers() or []
             except Exception:
                 avail = []
 
-            if self._preferred_provider != "cpu" and config.gpu_enabled() and "DmlExecutionProvider" in avail:
-                providers = ["DmlExecutionProvider", "CPUExecutionProvider"]
-            elif self._preferred_provider == "cpu":
-                providers = ["CPUExecutionProvider"]
+            gpu_provider = None
+            if self._preferred_provider and self._preferred_provider not in ("auto", "cpu"):
+                pref_map = {
+                    "cuda": "CUDAExecutionProvider",
+                    "dml": "DmlExecutionProvider",
+                    "rocm": "ROCMExecutionProvider",
+                    "coreml": "CoreMLExecutionProvider",
+                    "openvino": "OpenVINOExecutionProvider",
+                }
+                mapped = pref_map.get(self._preferred_provider, self._preferred_provider)
+                if mapped in avail and mapped != "CPUExecutionProvider":
+                    gpu_provider = mapped
+            if gpu_provider is None:
+                for p in (
+                    "CUDAExecutionProvider",
+                    "DmlExecutionProvider",
+                    "ROCMExecutionProvider",
+                    "CoreMLExecutionProvider",
+                    "OpenVINOExecutionProvider",
+                ):
+                    if p in avail:
+                        gpu_provider = p
+                        break
+            providers: list[str] = [gpu_provider] if gpu_provider else ["CPUExecutionProvider"]
 
             _logger.info("Available ORT providers: %s | selected: %s", avail, providers)
 

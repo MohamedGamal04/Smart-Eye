@@ -16,6 +16,42 @@ _object_models: dict[int, ONNXObjectModel] = {}
 _object_models_lock = threading.Lock()
 
 
+def _sync_plugin_classes_from_model(plugin_id: int, model: ONNXObjectModel) -> None:
+    try:
+        names_map = model.class_names or {}
+        if not isinstance(names_map, dict) or not names_map:
+            return
+
+        existing_rows = db.get_plugin_classes(plugin_id=plugin_id) or []
+        by_index = {}
+        for row in existing_rows:
+            try:
+                by_index[int(row.get("class_index"))] = row
+            except Exception:
+                continue
+
+        for class_idx, class_name in names_map.items():
+            try:
+                idx = int(class_idx)
+            except Exception:
+                continue
+            name_txt = str(class_name).strip() or str(idx)
+            cur = by_index.get(idx)
+            if cur is None:
+                db.add_plugin_class(plugin_id, idx, name_txt, name_txt)
+                continue
+
+            updates = {}
+            if (cur.get("class_name") or "") != name_txt:
+                updates["class_name"] = name_txt
+            if not (cur.get("display_name") or "").strip():
+                updates["display_name"] = name_txt
+            if updates:
+                db.update_plugin_class(cur["id"], **updates)
+    except Exception:
+        _logger.debug("Failed to sync plugin classes for plugin %s", plugin_id, exc_info=True)
+
+
 def get_face_model(wait: bool = False) -> FaceModel:
     global _face_model
     if _face_model is not None and _face_model.is_loaded:
@@ -123,6 +159,8 @@ def load_plugin(plugin_row: dict) -> ONNXObjectModel:
     _, model = _load_single_plugin(plugin_row)
     if model is None:
         return None
+
+    _sync_plugin_classes_from_model(pid, model)
 
     with _object_models_lock:
         _object_models[pid] = model
