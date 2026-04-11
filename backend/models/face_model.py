@@ -112,6 +112,30 @@ _cached_model_name: str | None = None
 _cached_providers: list[str] | None = None
 
 
+def _normalize_provider_preference(raw: str | None) -> str:
+    val = str(raw or "auto").strip().lower()
+    aliases = {
+        "nvidia": "cuda",
+        "gpu": "auto",
+        "directml": "dml",
+    }
+    val = aliases.get(val, val)
+    return val if val in ("auto", "cuda", "dml", "rocm", "coreml", "openvino", "cpu") else "auto"
+
+
+def _global_provider_preference() -> str:
+    env_pref = os.getenv("SMARTEYE_ONNX_PROVIDER", "").strip()
+    if env_pref:
+        return _normalize_provider_preference(env_pref)
+    try:
+        pref = db.get_setting("face_onnx_provider_preference", None)
+        if pref is None:
+            pref = db.get_setting("onnx_provider_preference", "auto")
+        return _normalize_provider_preference(pref)
+    except Exception:
+        return "auto"
+
+
 def _get_model_name() -> str:
     global _cached_model_name
     if _cached_model_name is not None:
@@ -145,19 +169,37 @@ def _detect_providers() -> list[str]:
         return _cached_providers
 
     providers = []
-    for p in (
-        "CUDAExecutionProvider",
-        "DmlExecutionProvider",
-        "ROCMExecutionProvider",
-        "CoreMLExecutionProvider",
-        "OpenVINOExecutionProvider",
-    ):
-        if p in avail:
-            providers = [p]
-            break
+    gpu_allowed = bool(config.gpu_enabled())
+    effective_pref = _global_provider_preference()
 
+    pref_map = {
+        "cuda": "CUDAExecutionProvider",
+        "dml": "DmlExecutionProvider",
+        "rocm": "ROCMExecutionProvider",
+        "coreml": "CoreMLExecutionProvider",
+        "openvino": "OpenVINOExecutionProvider",
+    }
+
+    if gpu_allowed and effective_pref not in ("auto", "cpu"):
+        mapped = pref_map.get(effective_pref, effective_pref)
+        if mapped in avail and mapped != "CPUExecutionProvider":
+            providers.append(mapped)
+
+    if gpu_allowed and not providers and effective_pref != "cpu":
+        for p in (
+            "CUDAExecutionProvider",
+            "DmlExecutionProvider",
+            "ROCMExecutionProvider",
+            "CoreMLExecutionProvider",
+            "OpenVINOExecutionProvider",
+        ):
+            if p in avail:
+                providers.append(p)
+                break
+
+    # Face model must run on a single concrete backend (GPU or CPU), not a hybrid chain.
     if not providers:
-        providers = ["CPUExecutionProvider"]
+        providers = ["CPUExecutionProvider"] if "CPUExecutionProvider" in avail or not avail else ["CPUExecutionProvider"]
     _cached_providers = providers
     _logger.info("Cached providers=%s | available=%s", _cached_providers, avail)
     return _cached_providers
@@ -315,7 +357,7 @@ class FaceModel:
                     db.set_setting("insightface_root_cache", root)
                 return
             except Exception:
-                _logger.warning("InsightFace GPU load failed, falling back to CPU", exc_info=True)
+                _logger.warning("InsightFace preferred provider load failed, falling back to CPU", exc_info=True)
                 self._last_load_error = f"Preferred providers init failed:\n{traceback.format_exc()}"
 
             try:

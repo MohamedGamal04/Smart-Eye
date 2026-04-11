@@ -37,7 +37,7 @@ class PlaybackThread(QThread):
         self._cap = None
         self._total_frames = 0
         self._detection_events = []
-        self._detection_enabled = False
+        self._plugins_enabled = False
         self._face_detection_enabled = True
         self._disabled_object_classes: set[str] = set()
         self._record_enabled = False
@@ -104,6 +104,9 @@ class PlaybackThread(QThread):
 
         def _evaluate_frame(frame, w, h, infer_idx):
             detection_results = detector.process_frame(frame, self._camera_id)
+            if not self._plugins_enabled:
+                detection_results["objects"] = []
+                detection_results["ghost_objects"] = []
             if not self._face_detection_enabled:
                 detection_results["faces"] = []
                 detection_results["ghost_faces"] = []
@@ -216,7 +219,7 @@ class PlaybackThread(QThread):
                 pending_future = None
 
             should_schedule = (
-                self._detection_enabled
+                (self._plugins_enabled or self._face_detection_enabled)
                 and pending_future is None
                 and self._running
                 and not self.isInterruptionRequested()
@@ -232,12 +235,12 @@ class PlaybackThread(QThread):
                         break
                     logging.getLogger(__name__).warning("Playback: infer submit failed", exc_info=True)
 
-            if (not self._detection_enabled) and pending_future is not None:
+            if (not self._plugins_enabled and not self._face_detection_enabled) and pending_future is not None:
                 if not pending_future.done():
                     pending_future.cancel()
                 pending_future = None
 
-            primary_state = dict(last_detect_state) if self._detection_enabled else {"triggered_rules": []}
+            primary_state = dict(last_detect_state) if (self._plugins_enabled or self._face_detection_enabled) else {"triggered_rules": []}
             primary_state["frame_index"] = frame_idx
 
             if _clip_cooldown > 0:
@@ -322,8 +325,12 @@ class PlaybackThread(QThread):
     def seek(self, frame_number):
         self._seek_frame = frame_number
 
+    def set_plugins_enabled(self, enabled: bool):
+        self._plugins_enabled = bool(enabled)
+
     def set_detection_enabled(self, enabled: bool):
-        self._detection_enabled = enabled
+        # Backward-compatible alias for older call sites.
+        self.set_plugins_enabled(enabled)
 
     def set_face_detection_enabled(self, enabled: bool):
         self._face_detection_enabled = bool(enabled)

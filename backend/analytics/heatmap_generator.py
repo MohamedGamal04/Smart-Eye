@@ -1,8 +1,11 @@
 import os
 import threading
+import json
 
 import cv2
 import numpy as np
+
+from backend.repository import db
 
 
 class HeatmapGenerator:
@@ -40,6 +43,9 @@ class HeatmapGenerator:
             result = colored
         return result
 
+    def has_data(self):
+        return self._count > 0
+
     def save(self, filepath, background=None):
         img = self.generate(background)
         os.makedirs(os.path.dirname(filepath) if os.path.dirname(filepath) else ".", exist_ok=True)
@@ -60,3 +66,77 @@ def get_generator(camera_id, width=640, height=480):
         if camera_id not in _generators:
             _generators[camera_id] = HeatmapGenerator(width, height)
         return _generators[camera_id]
+
+
+def _iter_bboxes(payload):
+    data = payload
+    if isinstance(payload, str):
+        try:
+            data = json.loads(payload)
+        except Exception:
+            data = {}
+    if not isinstance(data, dict):
+        return
+
+    object_bboxes = data.get("object_bboxes") or []
+    if isinstance(object_bboxes, list):
+        for item in object_bboxes:
+            if not isinstance(item, dict):
+                continue
+            bbox = item.get("bbox")
+            if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                yield bbox
+
+    faces = data.get("all_faces") or []
+    if isinstance(faces, list):
+        for face in faces:
+            if not isinstance(face, dict):
+                continue
+            bbox = face.get("bbox")
+            if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                yield bbox
+
+    heatmap_boxes = data.get("heatmap_boxes") or []
+    if isinstance(heatmap_boxes, list):
+        for bbox in heatmap_boxes:
+            if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                yield bbox
+
+
+def generate_heatmap_from_db(camera_id, date_from=None, date_to=None, width=640, height=480, max_rows=12000):
+    if camera_id is None:
+        return None
+    gen = HeatmapGenerator(width=width, height=height)
+    conn = db.get_conn()
+    q = "SELECT detections FROM detection_logs WHERE camera_id=?"
+    params = [camera_id]
+    if date_from:
+        q += " AND timestamp>=?"
+        params.append(date_from)
+    if date_to:
+        q += " AND timestamp<=?"
+        params.append(date_to)
+    q += " ORDER BY timestamp DESC LIMIT ?"
+    params.append(max_rows)
+
+    for row in conn.execute(q, params).fetchall():
+        payload = row[0]
+        frame_w = width
+        frame_h = height
+        if isinstance(payload, str):
+            try:
+                parsed = json.loads(payload)
+            except Exception:
+                parsed = {}
+            if isinstance(parsed, dict):
+                frame_w = int(parsed.get("frame_w") or width)
+                frame_h = int(parsed.get("frame_h") or height)
+        for bbox in _iter_bboxes(payload):
+            try:
+                gen.add_detection(bbox, frame_w, frame_h)
+            except Exception:
+                continue
+
+    if not gen.has_data():
+        return None
+    return gen.generate()

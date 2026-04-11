@@ -158,7 +158,6 @@ jobs:
             qt6qmlworkerscript.dll
             qt6scxml.dll
             qt6spatialaudio.dll
-            Cython/*
             skimage/data/*
             pyqtgraph/examples/*
           assume-yes-for-downloads: true
