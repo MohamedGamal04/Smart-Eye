@@ -5,7 +5,7 @@ import secrets
 import uuid
 
 
-CURRENT_VERSION = 20
+CURRENT_VERSION = 21
 
 
 def apply(conn):
@@ -51,6 +51,8 @@ def apply(conn):
         _migrate_v19(conn)
     if version < 20:
         _migrate_v20(conn)
+    if version < 21:
+        _migrate_v21(conn)
     conn.execute(f"PRAGMA user_version = {CURRENT_VERSION}")
     conn.commit()
 
@@ -377,4 +379,41 @@ def _migrate_v20(conn):
                 "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
                 ("theme_json_path", "", "string", "Theme JSON Path", "general"),
             )
+    conn.commit()
+
+
+def _migrate_v21(conn):
+    tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+    if "detection_logs" in tables:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(detection_logs)").fetchall()]
+        if "gender_norm" not in cols:
+            conn.execute("ALTER TABLE detection_logs ADD COLUMN gender_norm TEXT DEFAULT 'unknown'")
+        if "has_identity" not in cols:
+            conn.execute("ALTER TABLE detection_logs ADD COLUMN has_identity INTEGER DEFAULT 0")
+        conn.execute(
+            "UPDATE detection_logs SET gender_norm = CASE "
+            "WHEN detections LIKE '%\"gender\": \"male\"%' THEN 'male' "
+            "WHEN detections LIKE '%\"gender\": \"female\"%' THEN 'female' "
+            "ELSE 'unknown' END "
+        )
+        conn.execute(
+            "UPDATE detection_logs SET has_identity = CASE "
+            "WHEN identity IS NOT NULL AND TRIM(identity) != '' AND LOWER(TRIM(identity)) != 'unknown' THEN 1 "
+            "ELSE 0 END "
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_detection_logs_gender_norm ON detection_logs (gender_norm)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_detection_logs_has_identity ON detection_logs (has_identity)")
+
+    obsolete_settings = [
+        "experimental_optimization_enabled",
+        "experimental_auto_optimize_enabled",
+        "experimental_motion_gate_enabled",
+        "experimental_motion_threshold",
+        "experimental_motion_full_scan_every",
+        "experimental_plugin_infer_stride",
+        "plugin_failure_cooldown_sec",
+        "inference_future_timeout_sec",
+    ]
+    for key in obsolete_settings:
+        conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
     conn.commit()

@@ -19,7 +19,7 @@ _CONN_TIMEOUT = 15
 _writer_thread = None
 _writer_thread_id = None
 _writer_conn = None
-_write_queue = queue.Queue()
+_write_queue = queue.Queue(maxsize=10000)
 _writer_stop = threading.Event()
 
 
@@ -91,6 +91,15 @@ def _ensure_writer():
     _writer_stop.clear()
     _writer_thread = threading.Thread(target=_writer_loop, name="db-writer", daemon=True)
     _writer_thread.start()
+
+
+def _queue_write_item(item):
+    try:
+        _write_queue.put(item, timeout=2.0)
+        return
+    except queue.Full:
+        logging.getLogger(__name__).warning("DB write queue full; waiting for worker")
+    _write_queue.put(item)
 
 
 class _ConnProxy:
@@ -226,7 +235,7 @@ def _write_execute(sql: str, params=(), commit: bool = True):
             _writer_conn.commit()
         return cur
     result_q = queue.Queue(maxsize=1)
-    _write_queue.put(("SQL", sql, params, commit, result_q))
+    _queue_write_item(("SQL", sql, params, commit, result_q))
     cur, err = result_q.get()
     if err:
         raise err
@@ -238,7 +247,7 @@ def _write_call(fn):
     if threading.get_ident() == _writer_thread_id and _writer_conn is not None:
         return fn(_writer_conn)
     result_q = queue.Queue(maxsize=1)
-    _write_queue.put(("CALL", fn, result_q))
+    _queue_write_item(("CALL", fn, result_q))
     res, err = result_q.get()
     if err:
         raise err
@@ -1050,11 +1059,15 @@ def _normalize_detections_payload(payload):
 
 
 def add_detection_log(camera_id, zone_id, identity, face_confidence, detections, rules_triggered, alarm_level, snapshot_path=""):
-    det_json = json.dumps(_normalize_detections_payload(detections)) if isinstance(detections, dict) else detections
+    det_norm = _normalize_detections_payload(detections) if isinstance(detections, dict) else _normalize_detections_payload(detections)
+    det_json = json.dumps(det_norm)
     rules_json = json.dumps(rules_triggered) if isinstance(rules_triggered, list) else rules_triggered
+    gender_norm = _normalize_gender_value(det_norm.get("gender"))
+    ident_text = (identity or "").strip().lower()
+    has_identity = 1 if ident_text and ident_text != "unknown" else 0
     cur = _write_execute(
-        "INSERT INTO detection_logs (camera_id, zone_id, identity, face_confidence, detections, rules_triggered, alarm_level, snapshot_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (camera_id, zone_id, identity, face_confidence, det_json, rules_json, alarm_level, snapshot_path),
+        "INSERT INTO detection_logs (camera_id, zone_id, identity, face_confidence, detections, gender_norm, rules_triggered, alarm_level, snapshot_path, has_identity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (camera_id, zone_id, identity, face_confidence, det_json, gender_norm, rules_json, alarm_level, snapshot_path, has_identity),
     )
     return cur.lastrowid
 
@@ -1352,8 +1365,8 @@ def get_detection_stats(date_from=None, date_to=None, camera_id=None, min_alarm_
         q += " AND alarm_level>=?"
         params.append(int(min_alarm_level))
     if gender:
-        q += " AND detections LIKE ?"
-        params.append(f'%\"gender\": \"{_normalize_gender_value(gender)}\"%')
+        q += " AND gender_norm=?"
+        params.append(_normalize_gender_value(gender))
     row = _conn.execute(q, params).fetchone()
     return dict(row)
 
@@ -1384,8 +1397,8 @@ def get_hourly_violations(
         q += " AND rules_triggered LIKE ?"
         params.append(f"%{rule_name}%")
     if gender:
-        q += " AND detections LIKE ?"
-        params.append(f'%\"gender\": \"{_normalize_gender_value(gender)}\"%')
+        q += " AND gender_norm=?"
+        params.append(_normalize_gender_value(gender))
     q += " GROUP BY hour ORDER BY hour"
     return [dict(r) for r in _conn.execute(q, params).fetchall()]
 
@@ -1393,7 +1406,7 @@ def get_hourly_violations(
 def get_violations_by_person(
     date_from=None, date_to=None, camera_id=None, rule_name=None, min_alarm_level=None, limit=20, gender=None
 ):
-    q = """SELECT identity, detections
+    q = """SELECT identity, gender_norm
            FROM detection_logs
            WHERE identity IS NOT NULL AND identity != ''"""
     params = []
@@ -1415,18 +1428,17 @@ def get_violations_by_person(
         q += " AND rules_triggered LIKE ?"
         params.append(f"%{rule_name}%")
     if gender:
-        q += " AND detections LIKE ?"
-        params.append(f'%\"gender\": \"{_normalize_gender_value(gender)}\"%')
+        q += " AND gender_norm=?"
+        params.append(_normalize_gender_value(gender))
     rows = [dict(r) for r in _conn.execute(q, params).fetchall()]
     agg = {}
     for row in rows:
         identity = row.get("identity") or ""
         if not identity:
             continue
-        det = _normalize_detections_payload(row.get("detections"))
         entry = agg.setdefault(identity, {"identity": identity, "count": 0, "gender": "unknown"})
         entry["count"] += 1
-        g = _normalize_gender_value(det.get("gender"))
+        g = _normalize_gender_value(row.get("gender_norm"))
         if entry["gender"] == "unknown" and g != "unknown":
             entry["gender"] = g
     result = sorted(agg.values(), key=lambda x: x["count"], reverse=True)
@@ -1434,7 +1446,7 @@ def get_violations_by_person(
 
 
 def get_violations_by_gender(date_from=None, date_to=None, camera_id=None, rule_name=None, min_alarm_level=None, gender=None):
-    q = "SELECT detections FROM detection_logs WHERE 1=1"
+    q = "SELECT gender_norm FROM detection_logs WHERE 1=1"
     params = []
     if min_alarm_level is not None:
         q += " AND alarm_level>=?"
@@ -1454,12 +1466,12 @@ def get_violations_by_gender(date_from=None, date_to=None, camera_id=None, rule_
         q += " AND rules_triggered LIKE ?"
         params.append(f"%{rule_name}%")
     if gender:
-        q += " AND detections LIKE ?"
-        params.append(f'%\"gender\": \"{_normalize_gender_value(gender)}\"%')
+        q += " AND gender_norm=?"
+        params.append(_normalize_gender_value(gender))
 
     counts = {"male": 0, "female": 0, "unknown": 0}
     for row in _conn.execute(q, params).fetchall():
-        g = _normalize_gender_value(_normalize_detections_payload(row["detections"]).get("gender"))
+        g = _normalize_gender_value(row["gender_norm"])
         counts[g] = counts.get(g, 0) + 1
     return [
         {"gender": "male", "count": counts["male"]},
@@ -1469,7 +1481,7 @@ def get_violations_by_gender(date_from=None, date_to=None, camera_id=None, rule_
 
 
 def get_camera_activity(date_from=None, date_to=None, camera_id=None):
-    q = """SELECT c.name as camera_name, COUNT(dl.id) as count
+    q = """SELECT c.id as camera_id, c.name as camera_name, COUNT(dl.id) as count
            FROM cameras c
            LEFT JOIN detection_logs dl ON c.id=dl.camera_id"""
     params = []
@@ -1512,8 +1524,8 @@ def get_compliance_over_time(rule_name=None, date_from=None, date_to=None, camer
         q += " AND camera_id=?"
         params.append(camera_id)
     if gender:
-        q += " AND detections LIKE ?"
-        params.append(f'%\"gender\": \"{_normalize_gender_value(gender)}\"%')
+        q += " AND gender_norm=?"
+        params.append(_normalize_gender_value(gender))
     q += " GROUP BY day ORDER BY day"
     return [dict(r) for r in _conn.execute(q, params).fetchall()]
 
@@ -1521,7 +1533,7 @@ def get_compliance_over_time(rule_name=None, date_from=None, date_to=None, camer
 def get_identified_count(date_from=None, date_to=None, camera_id=None, rule_name=None, min_alarm_level=None, gender=None):
     q = """SELECT COUNT(DISTINCT identity) as count
            FROM detection_logs
-           WHERE identity IS NOT NULL AND identity != '' AND identity != 'Unknown'"""
+           WHERE has_identity=1"""
     params = []
     if min_alarm_level is not None:
         q += " AND alarm_level>=?"
@@ -1539,8 +1551,8 @@ def get_identified_count(date_from=None, date_to=None, camera_id=None, rule_name
         q += " AND camera_id=?"
         params.append(camera_id)
     if gender:
-        q += " AND detections LIKE ?"
-        params.append(f'%\"gender\": \"{_normalize_gender_value(gender)}\"%')
+        q += " AND gender_norm=?"
+        params.append(_normalize_gender_value(gender))
     row = _conn.execute(q, params).fetchone()
     return dict(row) if row else {"count": 0}
 
@@ -1618,7 +1630,7 @@ def get_db_path():
 def reset_database():
     schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
 
-    _PRESERVE = {"app_settings"}
+    _PRESERVE = {"app_settings", "accounts"}
 
     def _op(conn):
         conn.execute("PRAGMA foreign_keys = OFF")
@@ -1656,3 +1668,7 @@ def reset_database():
             pass
 
     _write_call(_op)
+
+
+
+    ensure_default_account()
