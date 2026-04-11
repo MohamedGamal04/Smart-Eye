@@ -22,9 +22,9 @@ from backend.repository import db
 from frontend.services.rules_service import RulesService
 from frontend.widgets.confirm_delete_button import ConfirmDeleteButton
 from frontend.widgets.toggle_switch import ToggleSwitch
-from frontend.styles._colors import _ACCENT_BG_08, _SUCCESS_BG_10, _SUCCESS_BG_20
+from frontend.widgets.action_feedback import make_manager_footer_layout
+from frontend.styles._colors import _SUCCESS_BG_10, _SUCCESS_BG_20
 from frontend.styles._banner_styles import make_edit_banner
-from frontend.styles._btn_styles import _SECONDARY_BTN
 from ._widgets import build_rule_header
 from frontend.styles._input_styles import _FORM_INPUT_TITLE, _FORM_INPUTS
 from frontend.ui_tokens import (
@@ -36,6 +36,7 @@ from frontend.ui_tokens import (
     FONT_WEIGHT_NORMAL,
     RADIUS_3,
     RADIUS_5,
+    SIZE_BTN_W_80,
     SIZE_BTN_W_MD,
     SIZE_BTN_W_SM,
     SIZE_CONTROL_MD,
@@ -57,13 +58,14 @@ from frontend.ui_tokens import (
 )
 
 from ._constants import (
-    _ACTION_META,
     _ADD_BTN_BLUE,
     _BG_SURFACE,
     _BORDER,
     _BORDER_DIM,
     _PRIMARY_BTN,
     _SUCCESS,
+    _TEXT_BTN_BLUE,
+    _TEXT_BTN_GHOST,
     _TEXT_BTN_RED,
     _TEXT_BTN_RED_CONFIRM,
     _TEXT_MUTED,
@@ -178,7 +180,6 @@ class _BaseRuleForm(QWidget):
         self._e_action = QComboBox()
         self._e_action.addItems(["alarm", "suppress", "log_only"])
         self._e_action.setStyleSheet(_combo_ss())
-        self._action_pill = None
         body_l.addWidget(_srow("Action", self._e_action))
 
         self._e_camera = QComboBox()
@@ -212,19 +213,6 @@ class _BaseRuleForm(QWidget):
         en_h.addWidget(en_lbl)
         en_h.addStretch()
         body_l.addWidget(_srow("Active", en_wrap))
-
-    def _refresh_action_pill(self, text: str):
-        if self._action_pill is None:
-            return
-        fg, bg, _border, label = _ACTION_META.get(text, (_TEXT_SEC, _ACCENT_BG_08, _BORDER_DIM, text.upper()))
-        self._action_pill.setText(label)
-        self._action_pill.setStyleSheet(f"""
-            color:{fg};
-            background-color:{bg};
-            border:none;
-            border-radius:{RADIUS_5}px; padding:0 {SPACE_SM}px;
-            font-size:{FONT_SIZE_MICRO}px; font-weight:{FONT_WEIGHT_BOLD}; letter-spacing:0.{SPACE_XS}px;
-        """)
 
     def _build_conditions_section(self, body_l: QVBoxLayout):
         body_l.addWidget(_make_sdiv("Conditions"))
@@ -372,30 +360,29 @@ class _EditRuleForm(_BaseRuleForm):
         self._build_alarms_section(body_l)
 
     def _make_action_bar(self) -> QHBoxLayout:
-        ab = QHBoxLayout()
-        ab.setContentsMargins(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD)
-        ab.setSpacing(SPACE_SM)
         del_btn = ConfirmDeleteButton("Delete", "Sure?")
         del_btn.setFixedHeight(SIZE_CONTROL_MD)
         del_btn.setFixedWidth(SIZE_BTN_W_MD)
         del_btn.set_button_styles(_TEXT_BTN_RED, _TEXT_BTN_RED_CONFIRM)
         del_btn.set_confirm_callback(lambda: self.delete_requested.emit())
-        ab.addWidget(del_btn)
-        ab.addStretch()
 
         cancel = QPushButton("Cancel")
         cancel.setFixedHeight(SIZE_CONTROL_MD)
-        cancel.setFixedWidth(SIZE_BTN_W_SM)
-        cancel.setStyleSheet(_SECONDARY_BTN)
+        cancel.setFixedWidth(SIZE_BTN_W_80)
+        cancel.setStyleSheet(_TEXT_BTN_GHOST)
         cancel.clicked.connect(lambda: self.cancel_requested.emit())
-        ab.addWidget(cancel)
 
         save = QPushButton("Save")
         save.setFixedHeight(SIZE_CONTROL_MD)
-        save.setStyleSheet(_PRIMARY_BTN)
+        save.setFixedWidth(SIZE_BTN_W_80)
+        save.setStyleSheet(_TEXT_BTN_BLUE)
         save.clicked.connect(self._do_save)
-        ab.addWidget(save)
-        return ab
+        return make_manager_footer_layout(
+            left_widget=del_btn,
+            right_widgets=[cancel, save],
+            margins=(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD),
+            spacing=SPACE_SM,
+        )
 
     def _seed_from_rule(self, rule: dict):
         self._e_name.setText(rule.get("name", ""))
@@ -403,7 +390,6 @@ class _EditRuleForm(_BaseRuleForm):
         self._e_logic.setCurrentText(rule.get("logic", "AND"))
         action = rule.get("action", "log_only")
         self._e_action.setCurrentText(action)
-        self._refresh_action_pill(action)
         self._e_priority.setValue(int(rule.get("priority", 0)))
         self._e_enabled.setChecked(bool(rule.get("enabled", 1)))
 
@@ -450,7 +436,7 @@ class _EditRuleForm(_BaseRuleForm):
 
 
 class NewRulePanel(_BaseRuleForm):
-    saved = Signal()
+    saved = Signal(int)
     close_requested = Signal()
 
     def __init__(self, rules_service: RulesService, parent=None):
@@ -486,26 +472,24 @@ class NewRulePanel(_BaseRuleForm):
         self._build_alarms_section(body_l)
 
         self._e_action.setCurrentText("log_only")
-        self._refresh_action_pill("log_only")
         self._e_enabled.setChecked(True)
 
     def _make_action_bar(self) -> QHBoxLayout:
-        ab = QHBoxLayout()
-        ab.setContentsMargins(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD)
-        ab.setSpacing(SPACE_SM)
-        ab.addStretch()
         close = QPushButton("Close")
         close.setFixedHeight(SIZE_CONTROL_MD)
-        close.setFixedWidth(SIZE_BTN_W_SM)
-        close.setStyleSheet(_SECONDARY_BTN)
+        close.setFixedWidth(SIZE_BTN_W_80)
+        close.setStyleSheet(_TEXT_BTN_GHOST)
         close.clicked.connect(lambda: self.close_requested.emit())
-        ab.addWidget(close)
         save = QPushButton("Save")
         save.setFixedHeight(SIZE_CONTROL_MD)
-        save.setStyleSheet(_PRIMARY_BTN)
+        save.setFixedWidth(SIZE_BTN_W_80)
+        save.setStyleSheet(_TEXT_BTN_BLUE)
         save.clicked.connect(self._do_save)
-        ab.addWidget(save)
-        return ab
+        return make_manager_footer_layout(
+            right_widgets=[close, save],
+            margins=(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD),
+            spacing=SPACE_SM,
+        )
 
     def reset(self):
         self._alarm_cards.clear()
@@ -514,7 +498,6 @@ class NewRulePanel(_BaseRuleForm):
         self._e_desc.clear()
         self._e_logic.setCurrentIndex(0)
         self._e_action.setCurrentText("log_only")
-        self._refresh_action_pill("log_only")
         self._e_priority.setValue(0)
         self._e_camera.setCurrentIndex(0)
         self._e_zone.setCurrentIndex(0)
@@ -543,7 +526,7 @@ class NewRulePanel(_BaseRuleForm):
             self._e_name.setFocus()
             return
 
-        self._rules_service.save_rule(
+        rid = self._rules_service.save_rule(
             None,
             data=dict(
                 name=name,
@@ -558,4 +541,4 @@ class NewRulePanel(_BaseRuleForm):
             conditions=self._collect_conditions(),
             alarms=self._collect_alarms(),
         )
-        self.saved.emit()
+        self.saved.emit(int(rid))

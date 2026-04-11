@@ -8,6 +8,7 @@ from PySide6.QtGui import QFont, QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
+    QComboBox,
     QLineEdit,
     QMessageBox,
     QPushButton,
@@ -45,12 +46,12 @@ from frontend.ui_tokens import (
 
 from ._constants import (
     _DANGER,
-    _DANGER_BTN,
-    _PRIMARY_BTN,
     _BG_RAISED,
     _BORDER_DIM,
     _STYLESHEET,
     _SUCCESS,
+    _TEXT_BTN_BLUE,
+    _TEXT_BTN_RED,
     _TEXT_PRI,
     _TEXT_SEC,
     _compose_name,
@@ -233,6 +234,12 @@ class _EnrollPanelMixin:
         ]:
             fields_layout.addWidget(_add_field(lbl_text, widget))
 
+        # Gender selection
+        self._ef_gender = QComboBox()
+        self._ef_gender.addItems(["Unknown", "Male", "Female"])
+        self._ef_gender.setCurrentIndex(0)
+        fields_layout.addWidget(_add_field("Gender", self._ef_gender))
+
         access_row = QWidget()
         access_row.setFixedHeight(SIZE_ROW_MD)
         access_row.setStyleSheet("background: transparent; border: none;")
@@ -290,12 +297,12 @@ class _EnrollPanelMixin:
 
         self._enroll_save_btn = QPushButton("Save")
         self._enroll_save_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
-        self._enroll_save_btn.setStyleSheet(_PRIMARY_BTN)
+        self._enroll_save_btn.setStyleSheet(_TEXT_BTN_BLUE)
         btn_row.addWidget(self._enroll_save_btn)
 
         cancel_btn = QPushButton("Close")
         cancel_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
-        cancel_btn.setStyleSheet(_DANGER_BTN)
+        cancel_btn.setStyleSheet(_TEXT_BTN_RED)
         cancel_btn.clicked.connect(self._close_enroll_panel)
         btn_row.addWidget(cancel_btn)
 
@@ -365,6 +372,7 @@ class _EnrollPanelMixin:
             name,
             self._ef_dept.text().strip(),
             self._ef_auth.isChecked(),
+            gender=self._ef_gender.currentText().strip(),
             address=self._ef_address.text().strip(),
             country=self._ef_country.text().strip(),
             birth_date=self._ef_birth.text().strip(),

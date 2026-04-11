@@ -8,6 +8,32 @@ import numpy as np
 _logger = logging.getLogger(__name__)
 
 
+def _normalize_provider_preference(raw: str | None) -> str:
+    val = str(raw or "auto").strip().lower()
+    aliases = {
+        "nvidia": "cuda",
+        "gpu": "auto",
+        "directml": "dml",
+    }
+    val = aliases.get(val, val)
+    return val if val in ("auto", "cuda", "dml", "rocm", "coreml", "openvino", "cpu") else "auto"
+
+
+def _global_provider_preference() -> str:
+    env_pref = os.getenv("SMARTEYE_ONNX_PROVIDER", "").strip()
+    if env_pref:
+        return _normalize_provider_preference(env_pref)
+    try:
+        from backend.repository import db
+
+        pref = db.get_setting("plugin_onnx_provider_preference", None)
+        if pref is None:
+            pref = db.get_setting("onnx_provider_preference", "auto")
+        return _normalize_provider_preference(pref)
+    except Exception:
+        return "auto"
+
+
 class MissingModelFile(Exception):
     pass
 
@@ -30,6 +56,7 @@ class ONNXObjectModel:
     def load(self):
         try:
             import onnxruntime as ort
+            from utils import config
 
             names_map = {}
             self._last_error = None
@@ -44,7 +71,12 @@ class ONNXObjectModel:
                 avail = []
 
             gpu_provider = None
-            if self._preferred_provider and self._preferred_provider not in ("auto", "cpu"):
+            gpu_allowed = bool(config.gpu_enabled())
+            effective_pref = _normalize_provider_preference(self._preferred_provider)
+            if effective_pref == "auto":
+                effective_pref = _global_provider_preference()
+
+            if gpu_allowed and effective_pref not in ("auto", "cpu"):
                 pref_map = {
                     "cuda": "CUDAExecutionProvider",
                     "dml": "DmlExecutionProvider",
@@ -52,10 +84,10 @@ class ONNXObjectModel:
                     "coreml": "CoreMLExecutionProvider",
                     "openvino": "OpenVINOExecutionProvider",
                 }
-                mapped = pref_map.get(self._preferred_provider, self._preferred_provider)
+                mapped = pref_map.get(effective_pref, effective_pref)
                 if mapped in avail and mapped != "CPUExecutionProvider":
                     gpu_provider = mapped
-            if gpu_provider is None:
+            if gpu_allowed and gpu_provider is None and effective_pref != "cpu":
                 for p in (
                     "CUDAExecutionProvider",
                     "DmlExecutionProvider",
@@ -66,7 +98,12 @@ class ONNXObjectModel:
                     if p in avail:
                         gpu_provider = p
                         break
-            providers: list[str] = [gpu_provider] if gpu_provider else ["CPUExecutionProvider"]
+
+            providers: list[str] = []
+            if gpu_provider:
+                providers.append(gpu_provider)
+            if "CPUExecutionProvider" in avail or not providers:
+                providers.append("CPUExecutionProvider")
 
             _logger.info("Available ORT providers: %s | selected: %s", avail, providers)
 

@@ -30,6 +30,7 @@ from frontend.app_theme import safe_set_point_size
 from frontend.icon_theme import themed_icon_pixmap
 from frontend.dialogs import apply_popup_theme
 from frontend.widgets.confirm_delete_button import ConfirmDeleteButton
+from frontend.widgets.action_feedback import make_manager_footer_layout
 from frontend.widgets.toggle_switch import ToggleSwitch
 from frontend.styles._colors import (
     _ACCENT,
@@ -474,10 +475,6 @@ class CameraDetailPanel(QWidget):
         sep.setStyleSheet(_SEPARATOR_STYLE)
         lay.addWidget(sep)
 
-        ab = QHBoxLayout()
-        ab.setContentsMargins(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD)
-        ab.setSpacing(SPACE_SM)
-
         del_btn = ConfirmDeleteButton("Delete", "Sure?")
         del_btn.setFixedHeight(SIZE_CONTROL_MD)
         del_btn.setFixedWidth(SIZE_BTN_W_MD)
@@ -491,24 +488,26 @@ class CameraDetailPanel(QWidget):
             self.delete_requested.emit(self._cam_id)
 
         del_btn.set_confirm_callback(_do_delete)
-        ab.addWidget(del_btn)
-        ab.addStretch()
 
         close_btn = QPushButton("Close")
         close_btn.setFixedHeight(SIZE_CONTROL_MD)
         close_btn.setFixedWidth(SIZE_BTN_W_80)
         close_btn.setStyleSheet(_TEXT_BTN_GHOST)
         close_btn.clicked.connect(lambda: self.close_requested.emit())
-        ab.addWidget(close_btn)
 
         edit_btn = QPushButton("Edit")
         edit_btn.setFixedHeight(SIZE_CONTROL_MD)
         edit_btn.setFixedWidth(SIZE_BTN_W_80)
         edit_btn.setStyleSheet(_TEXT_BTN_BLUE)
         edit_btn.clicked.connect(self._open_edit)
-        ab.addWidget(edit_btn)
-
-        lay.addLayout(ab)
+        lay.addLayout(
+            make_manager_footer_layout(
+                left_widget=del_btn,
+                right_widgets=[close_btn, edit_btn],
+                margins=(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD),
+                spacing=SPACE_SM,
+            )
+        )
 
     def _make_hero(self, cam: dict, enabled: bool, face_on: bool) -> QFrame:
         hero = QFrame()
@@ -879,7 +878,7 @@ class CameraDetailPanel(QWidget):
                 hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
                 hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
                 tbl.setColumnWidth(0, SIZE_TABLE_COL_SM)
-                tbl.setColumnWidth(2, SIZE_BTN_W_84)
+                tbl.setColumnWidth(2, SIZE_BTN_W_MD)
                 tbl.verticalHeader().setDefaultSectionSize(SIZE_BADGE_H)
 
                 for row_i, cls in enumerate(classes):
@@ -906,7 +905,7 @@ class CameraDetailPanel(QWidget):
                     sp = QSpinBox()
                     sp.setRange(0, 100)
                     sp.setSuffix("%")
-                    sp.setFixedWidth(SIZE_FIELD_W_XS)
+                    sp.setFixedWidth(SIZE_BTN_W_SM)
                     sp.setStyleSheet(_spin_ss())
                     if idx in overrides and overrides[idx].get("confidence") is not None:
                         raw = float(overrides[idx]["confidence"])
@@ -918,7 +917,7 @@ class CameraDetailPanel(QWidget):
                     cell2 = QWidget()
                     cell2.setStyleSheet("background:transparent;")
                     h2 = QHBoxLayout(cell2)
-                    h2.setContentsMargins(SPACE_XS, 0, SPACE_SM, 0)
+                    h2.setContentsMargins(0, 0, 0, 0)
                     h2.setAlignment(Qt.AlignmentFlag.AlignVCenter)
                     h2.addWidget(sp)
                     tbl.setCellWidget(row_i, 2, cell2)
@@ -930,26 +929,6 @@ class CameraDetailPanel(QWidget):
                 tbl.setFixedHeight(row_h_total + hdr_h + SPACE_XXS)
                 wl.addWidget(tbl)
 
-            sv_row = QHBoxLayout()
-            sv_row.setContentsMargins(SPACE_20, SPACE_XS, SPACE_14, SPACE_XXS)
-            sv_row.addStretch()
-            sv_btn = QPushButton("Save Classes")
-            sv_btn.setFixedHeight(SIZE_CONTROL_24)
-            sv_btn.setStyleSheet(_TEXT_BTN_BLUE)
-
-            def _do_save_cls(
-                _=False,
-                _pid=plugin_id,
-            ):
-                _persist_plugin_class_overrides(_pid)
-                try:
-                    notify_plugins_changed()
-                except (RuntimeError, OSError):
-                    logger.warning("Failed to notify plugin changes after class save", exc_info=True)
-
-            sv_btn.clicked.connect(_do_save_cls)
-            sv_row.addWidget(sv_btn)
-            wl.addLayout(sv_row)
             plugin_class_widgets[plugin_id] = (cw, classes, def_conf)
             return wrap, cw
 
@@ -1019,10 +998,6 @@ class CameraDetailPanel(QWidget):
         sep.setStyleSheet(_SEPARATOR_STYLE)
         lay.addWidget(sep)
 
-        ab = QHBoxLayout()
-        ab.setContentsMargins(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD)
-        ab.setSpacing(SPACE_SM)
-
         del_btn_edit = ConfirmDeleteButton("Delete", "Sure?")
         del_btn_edit.setFixedHeight(SIZE_CONTROL_MD)
         del_btn_edit.setFixedWidth(SIZE_BTN_W_MD)
@@ -1036,20 +1011,17 @@ class CameraDetailPanel(QWidget):
             self.delete_requested.emit(self._cam_id)
 
         del_btn_edit.set_confirm_callback(_do_delete_edit)
-        ab.addWidget(del_btn_edit)
-        ab.addStretch()
 
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setFixedHeight(SIZE_CONTROL_MD)
-        cancel_btn.setFixedWidth(SIZE_BTN_W_84)
+        cancel_btn.setFixedWidth(SIZE_BTN_W_80)
         cancel_btn.setStyleSheet(_TEXT_BTN_GHOST)
         cancel_btn.clicked.connect(lambda: self.load_camera(db.get_camera(cam_id) or cam))
-        ab.addWidget(cancel_btn)
 
-        save_btn = QPushButton("Save Changes")
+        save_btn = QPushButton("Save")
         save_btn.setFixedHeight(SIZE_CONTROL_MD)
-
-        save_btn.setStyleSheet(_PRIMARY_BTN)
+        save_btn.setFixedWidth(SIZE_BTN_W_80)
+        save_btn.setStyleSheet(_TEXT_BTN_BLUE)
 
         def _do_save():
             name = e_name.text().strip()
@@ -1111,8 +1083,14 @@ class CameraDetailPanel(QWidget):
             self.saved.emit()
 
         save_btn.clicked.connect(_do_save)
-        ab.addWidget(save_btn)
-        lay.addLayout(ab)
+        lay.addLayout(
+            make_manager_footer_layout(
+                left_widget=del_btn_edit,
+                right_widgets=[cancel_btn, save_btn],
+                margins=(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD),
+                spacing=SPACE_SM,
+            )
+        )
 
     def _open_edit(self):
         if self._cam is None:
