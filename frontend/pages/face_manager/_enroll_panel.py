@@ -22,6 +22,7 @@ from frontend.app_theme import safe_set_point_size
 from frontend.widgets.face_capture_widget import FaceCaptureWidget
 from frontend.widgets.toggle_switch import ToggleSwitch
 from frontend.styles._colors import _WARNING_ORANGE
+from frontend.styles._input_styles import _FORM_COMBO
 from frontend.ui_tokens import (
     FONT_SIZE_BODY,
     FONT_SIZE_CAPTION,
@@ -137,10 +138,15 @@ class _EnrollPanelMixin:
                 f"color: {_TEXT_SEC}; font-size: {FONT_SIZE_LABEL}px; padding-right: {SPACE_MD}px; background: transparent; border: none;"
             )
             rl.addWidget(lbl)
-            widget.setStyleSheet(
-                f"background: transparent; border: none; border-radius: {RADIUS_NONE}px;"
-                f" padding: 0 {SPACE_XS}px; color: {_TEXT_PRI}; font-size: {FONT_SIZE_BODY}px;"
-            )
+            # Use a non-transparent combo style for dropdowns so the popup
+            # background and items are rendered with proper surface colors.
+            if isinstance(widget, QComboBox):
+                widget.setStyleSheet(_FORM_COMBO)
+            else:
+                widget.setStyleSheet(
+                    f"background: transparent; border: none; border-radius: {RADIUS_NONE}px;"
+                    f" padding: 0 {SPACE_XS}px; color: {_TEXT_PRI}; font-size: {FONT_SIZE_BODY}px;"
+                )
             widget.setFixedHeight(SIZE_CONTROL_MD)
             rl.addWidget(widget, stretch=1)
             return row

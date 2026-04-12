@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from frontend.widgets.no_wheel_combo import NoWheelComboBox
 
 from backend.analytics import report_generator, stats_engine
 from backend.analytics.heatmap_generator import generate_heatmap_from_db, get_generator
@@ -163,7 +164,7 @@ class AnalyticsPage(QWidget):
         self._alarm_combo.setStyleSheet(_FORM_COMBO)
         fl.addWidget(self._alarm_combo)
 
-        self._gender_combo = QComboBox()
+        self._gender_combo = NoWheelComboBox()
         self._gender_combo.addItem("All Genders", None)
         self._gender_combo.addItem("Male", "male")
         self._gender_combo.addItem("Female", "female")
