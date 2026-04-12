@@ -437,10 +437,17 @@ class CameraDetailPanel(QWidget):
                 max_faces = db.get_setting("max_faces_per_frame", 16) or 16
         except (sqlite3.Error, OSError, ValueError):
             max_faces = 16
+        try:
+            min_face_size = db.get_setting(f"camera_{cam['id']}_min_face_size", None)
+            if min_face_size is None:
+                min_face_size = db.get_setting("min_face_size", 40) or 40
+        except (sqlite3.Error, OSError, ValueError):
+            min_face_size = 40
         for lbl, val in [
             ("Face Recognition", "Enabled" if face_on else "Disabled"),
             ("Match Threshold", thresh_display),
             ("Max Faces / Frame", str(int(max_faces))),
+            ("Min Face Size", f"{int(min_face_size)} px"),
         ]:
             bl.addWidget(_info_row(lbl, val))
             bl.addWidget(_div())
@@ -739,6 +746,19 @@ class CameraDetailPanel(QWidget):
         max_faces_spin.setValue(int(cur_max))
         max_faces_spin.setStyleSheet(_spin_ss())
         body_l.addWidget(_srow("Max Faces / Frame", max_faces_spin))
+
+        try:
+            cur_min_face = db.get_setting(f"camera_{cam_id}_min_face_size", None)
+            if cur_min_face is None:
+                cur_min_face = db.get_setting("min_face_size", 40) or 40
+        except (sqlite3.Error, OSError, ValueError):
+            cur_min_face = 40
+        min_face_size_spin = QSpinBox()
+        min_face_size_spin.setRange(10, 500)
+        min_face_size_spin.setValue(int(cur_min_face))
+        min_face_size_spin.setSuffix(" px")
+        min_face_size_spin.setStyleSheet(_spin_ss())
+        body_l.addWidget(_srow("Min Face Size", min_face_size_spin))
 
         face_toggle = ToggleSwitch()
         face_toggle.setChecked(bool(cam.get("face_recognition")))
@@ -1049,6 +1069,10 @@ class CameraDetailPanel(QWidget):
                 db.set_setting(f"camera_{cam_id}_max_faces", int(max_faces_spin.value()))
             except (sqlite3.Error, OSError, ValueError):
                 logger.warning("Failed to persist max faces setting for camera id=%s", cam_id, exc_info=True)
+            try:
+                db.set_setting(f"camera_{cam_id}_min_face_size", int(min_face_size_spin.value()))
+            except (sqlite3.Error, OSError, ValueError):
+                logger.warning("Failed to persist min face size setting for camera id=%s", cam_id, exc_info=True)
             for pid, cb in plugin_checks.items():
                 try:
                     if cb.isChecked():

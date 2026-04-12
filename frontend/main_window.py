@@ -3,6 +3,7 @@ import logging
 
 from PySide6.QtCore import (
     QByteArray,
+    Qt,
     QTimer,
 )
 from PySide6.QtGui import QIcon
@@ -14,7 +15,9 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
     QMessageBox,
+    QMenu,
     QStackedWidget,
+    QSystemTrayIcon,
     QWidget,
 )
 
@@ -56,6 +59,9 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(get_theme(self._current_theme))
         self._rules_service = RulesService()
         self._service_manager = get_service_manager()
+        self._tray_icon: QSystemTrayIcon | None = None
+        self._tray_force_quit = False
+        self._is_shutting_down = False
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -122,6 +128,7 @@ class MainWindow(QMainWindow):
         self._blur_effect = None
 
         self._build_auth_overlay()
+        self._init_system_tray()
         if "dashboard" in self._pages:
             self._stack.setCurrentWidget(self._pages["dashboard"])
             self._sidebar.set_active("dashboard")
@@ -608,6 +615,39 @@ class MainWindow(QMainWindow):
             cw.setGraphicsEffect(None)
             self._blur_effect = None
 
+    def _init_system_tray(self) -> None:
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        tray = QSystemTrayIcon(self)
+        tray.setIcon(QIcon(LOGO_ICON_PATH))
+        tray.setToolTip("SmartEye")
+        menu = QMenu(self)
+        restore_action = menu.addAction("Restore")
+        quit_action = menu.addAction("Quit")
+        restore_action.triggered.connect(self._restore_from_tray)
+        quit_action.triggered.connect(self._quit_from_tray)
+        tray.activated.connect(self._on_tray_activated)
+        tray.setContextMenu(menu)
+        tray.show()
+        self._tray_icon = tray
+
+    def _on_tray_activated(self, reason) -> None:
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            self._restore_from_tray()
+
+    def _restore_from_tray(self) -> None:
+        self.show()
+        self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
+        self.raise_()
+        self.activateWindow()
+
+    def _quit_from_tray(self) -> None:
+        self._tray_force_quit = True
+        self.close()
+        app = QApplication.instance()
+        if app is not None:
+            QTimer.singleShot(0, app.quit)
+
     def _load_reset_questions(self, email: str):
         email = (email or "").strip()
         email_error = get_email_validation_error(email, allow_internal=True)
@@ -667,10 +707,28 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
 
     def closeEvent(self, event):
+        if self._is_shutting_down:
+            event.accept()
+            return
+
+        minimize_to_tray = False
+        with contextlib.suppress(Exception):
+            minimize_to_tray = bool(self._db.get_bool("minimize_to_tray", False))
+        if minimize_to_tray and self._tray_icon is not None and not self._tray_force_quit:
+            self.hide()
+            event.ignore()
+            return
+
+        self._is_shutting_down = True
+
         with contextlib.suppress(Exception):
             self._alert_timer.stop()
         with contextlib.suppress(Exception):
             self._cleanup_timer.stop()
+
+        with contextlib.suppress(Exception):
+            if self._tray_icon is not None:
+                self._tray_icon.hide()
 
 
         for key, page in list(self._pages.items()):
@@ -684,14 +742,21 @@ class MainWindow(QMainWindow):
             with contextlib.suppress(Exception):
                 self._release_services(self._current_key)
 
-        from backend.camera.camera_manager import get_camera_manager
+        with contextlib.suppress(Exception):
+            from backend.camera.camera_manager import get_camera_manager
 
-        get_camera_manager().stop_all()
-        from utils.system_monitor import get_monitor
+            get_camera_manager().stop_all()
+        with contextlib.suppress(Exception):
+            from utils.system_monitor import get_monitor
 
-        get_monitor().stop()
-        from backend.repository import db as _db
+            get_monitor().stop()
+        with contextlib.suppress(Exception):
+            from backend.repository import db as _db
 
-        _db.set_setting("window_geometry", bytes(self.saveGeometry().toHex()).decode())
+            _db.set_setting("window_geometry", bytes(self.saveGeometry().toHex()).decode())
         super().closeEvent(event)
+
+        app = QApplication.instance()
+        if app is not None:
+            QTimer.singleShot(0, app.quit)
 

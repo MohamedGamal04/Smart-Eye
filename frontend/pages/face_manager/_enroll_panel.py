@@ -35,6 +35,7 @@ from frontend.ui_tokens import (
     SIZE_LABEL_W,
     SIZE_ROW_84,
     SIZE_ROW_MD,
+    SPACE_10,
     SPACE_14,
     SPACE_20,
     SPACE_6,
@@ -117,17 +118,20 @@ class _EnrollPanelMixin:
         root.addWidget(sub)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setHandleWidth(SPACE_XXS)
-        splitter.setStyleSheet(f"QSplitter::handle {{ background: {_BORDER_DIM}; }}")
+        splitter.setHandleWidth(SPACE_10)
+        splitter.setStyleSheet("QSplitter::handle { background: transparent; }")
 
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(0)
 
-        def _add_field(label, widget):
+        def _add_field(label, widget, *, with_bottom_border=True):
             row = QWidget()
-            row.setStyleSheet(f"background: transparent; border-bottom: {SPACE_XXXS}px solid {_BORDER_DIM};")
+            _row_border = (
+                f"border-bottom: {SPACE_XXXS}px solid {_BORDER_DIM};" if with_bottom_border else "border-bottom: none;"
+            )
+            row.setStyleSheet(f"background: transparent; {_row_border}")
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 0, 0, 0)
             rl.setSpacing(0)
@@ -244,7 +248,7 @@ class _EnrollPanelMixin:
         self._ef_gender = QComboBox()
         self._ef_gender.addItems(["Unknown", "Male", "Female"])
         self._ef_gender.setCurrentIndex(0)
-        fields_layout.addWidget(_add_field("Gender", self._ef_gender))
+        fields_layout.addWidget(_add_field("Gender", self._ef_gender, with_bottom_border=False))
 
         access_row = QWidget()
         access_row.setFixedHeight(SIZE_ROW_MD)

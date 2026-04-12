@@ -3,6 +3,7 @@
 import logging
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -21,6 +22,7 @@ from shiboken6 import isValid
 from backend.repository import db
 from backend.notifications.email_notifier import test_email
 from backend.notifications.webhook_notifier import test_webhook
+from frontend.app_theme import safe_set_point_size
 from frontend.styles._hero_header import make_hero_header
 from frontend.styles._banner_styles import make_edit_banner
 from frontend.styles._btn_styles import _SECONDARY_BTN
@@ -66,6 +68,7 @@ from frontend.ui_tokens import (
     SIZE_BTN_W_MD,
     SIZE_BTN_W_SM,
     SIZE_BTN_W_80,
+    SIZE_CONTROL_32,
     SIZE_CONTROL_MD,
     SIZE_CONTROL_SM,
     SIZE_ITEM_SM,
@@ -87,6 +90,7 @@ from frontend.ui_tokens import (
 from ._constants import (
     _PRIMARY_BTN,
     _TEXT_BTN_BLUE,
+    _TEXT_BTN_GHOST,
     _TEXT_BTN_RED,
     _TEXT_BTN_RED_CONFIRM,
     _combo_ss,
@@ -352,33 +356,54 @@ class ProfilePanel(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        name = p.get("name", "New Notification Profile" if not editing else "Notification Profile")
-        subtitle = p.get("endpoint", "") or "No target set"
-        ptype = (p.get("type") or "email").upper() if editing else "NEW"
-        type_badge = QLabel(ptype)
-        type_badge.setStyleSheet(
-            f"font-size:{FONT_SIZE_MICRO}px; font-weight:{FONT_WEIGHT_BOLD}; "
-            f"padding:{SPACE_3}px {SPACE_10}px; border-radius:{RADIUS_LG}px; "
-            f"background:{_ACCENT_BG_12}; color:{_ACCENT_HI};"
-        )
-        badge_wrap = QFrame()
-        badge_wrap.setFixedSize(SIZE_ROW_72, SIZE_ROW_72)
-        badge_wrap.setStyleSheet(
-            f"QFrame {{ background: {_BG_RAISED}; border: {SPACE_XXXS}px solid {_BORDER_DIM}; border-radius: {RADIUS_LG}px; }}"
-        )
-        bw = QVBoxLayout(badge_wrap)
-        bw.setContentsMargins(SPACE_3, SPACE_3, SPACE_3, SPACE_3)
-        bw.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        bw.addWidget(type_badge)
-        root.addWidget(
-            make_hero_header(
-                "",
-                name,
-                subtitle,
-                left_widget=badge_wrap,
-                parent=self,
+        if not editing:
+            banner = QFrame()
+            banner.setStyleSheet(f"QFrame{{background:{_BG_RAISED};border:none;}}")
+            bh = QHBoxLayout(banner)
+            bh.setContentsMargins(SPACE_20, SPACE_10, SPACE_20, SPACE_10)
+            bh.setSpacing(SPACE_MD)
+            nf = QFont()
+            safe_set_point_size(nf, FONT_SIZE_BODY)
+            nf.setBold(True)
+            title = QLabel("Add Profile")
+            title.setFont(nf)
+            title.setStyleSheet(f"color:{_TEXT_PRI};")
+            bh.addWidget(title)
+            bh.addStretch()
+            close_x = QPushButton("✕")
+            close_x.setFixedSize(SIZE_CONTROL_32, SIZE_CONTROL_32)
+            close_x.setStyleSheet(_TEXT_BTN_GHOST + f"border-radius:{RADIUS_6}px;")
+            close_x.clicked.connect(self.close_requested.emit)
+            bh.addWidget(close_x)
+            root.addWidget(banner)
+        else:
+            name = p.get("name", "Notification Profile")
+            subtitle = p.get("endpoint", "") or "No target set"
+            ptype = (p.get("type") or "email").upper()
+            type_badge = QLabel(ptype)
+            type_badge.setStyleSheet(
+                f"font-size:{FONT_SIZE_MICRO}px; font-weight:{FONT_WEIGHT_BOLD}; "
+                f"padding:{SPACE_3}px {SPACE_10}px; border-radius:{RADIUS_LG}px; "
+                f"background:{_ACCENT_BG_12}; color:{_ACCENT_HI};"
             )
-        )
+            badge_wrap = QFrame()
+            badge_wrap.setFixedSize(SIZE_ROW_72, SIZE_ROW_72)
+            badge_wrap.setStyleSheet(
+                f"QFrame {{ background: {_BG_RAISED}; border: {SPACE_XXXS}px solid {_BORDER_DIM}; border-radius: {RADIUS_LG}px; }}"
+            )
+            bw = QVBoxLayout(badge_wrap)
+            bw.setContentsMargins(SPACE_3, SPACE_3, SPACE_3, SPACE_3)
+            bw.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            bw.addWidget(type_badge)
+            root.addWidget(
+                make_hero_header(
+                    "",
+                    name,
+                    subtitle,
+                    left_widget=badge_wrap,
+                    parent=self,
+                )
+            )
 
         self._edit_banner = make_edit_banner(f"Editing — {p.get('name', '')}", self)
         self._edit_banner.setVisible(editing and self._edit_mode)
@@ -400,6 +425,7 @@ class ProfilePanel(QWidget):
         if view_mode:
             body_l.setContentsMargins(SPACE_XL, SPACE_LG, SPACE_XL, SPACE_LG)
             body_l.setSpacing(SPACE_XXS)
+
             def _info_row(label: str, value: str):
                 w = QWidget()
                 w.setStyleSheet("background:transparent;border:none;")

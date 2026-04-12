@@ -65,6 +65,10 @@ def _button_styles() -> tuple[str, str, str]:
         return _PRIMARY_BTN, _SECONDARY_BTN, _DANGER_BTN
 
 
+def _scope_qpushbutton_qss(qss: str, scope: str = "QDialog") -> str:
+    return qss.replace("QPushButton", f"{scope} QPushButton")
+
+
 def _window_icon() -> QIcon:
     icon = QIcon(_ICON_PATH)
     return icon
@@ -79,6 +83,8 @@ def popup_surface_qss() -> str:
     text_muted = _theme_color("_TEXT_MUTED", _TEXT_MUTED)
     accent = _theme_color("_ACCENT", "#2f81f7")
     overlay = _theme_color("_BG_OVERLAY", "#1b2230")
+    _primary, secondary, _danger = _button_styles()
+    secondary_scoped = _scope_qpushbutton_qss(secondary)
     return f"""
         QDialog {{
             background-color: {bg2};
@@ -105,6 +111,7 @@ def popup_surface_qss() -> str:
             selection-background-color: {accent};
         }}
         QDialog QAbstractButton:disabled {{ color: {text_muted}; }}
+        {secondary_scoped}
     """
 
 

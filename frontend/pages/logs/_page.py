@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timedelta
 from PySide6.QtGui import QTextCharFormat, QColor
 
-from PySide6.QtCore import QDate, Qt, QTimer, QSettings
+from PySide6.QtCore import QDate, Qt, QTimer, QSettings, QSignalBlocker
 from PySide6.QtGui import QFont, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -17,12 +17,13 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QSpinBox,
+    QStackedWidget,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -57,7 +58,7 @@ from frontend.styles._colors import (
     _TEXT_SOFT,
 )
 from frontend.styles._input_styles import _FORM_INPUTS, _FORM_COMBO
-from frontend.styles._btn_styles import _PRIMARY_BTN, _SECONDARY_BTN, _DANGER_BTN
+from frontend.styles._btn_styles import _DANGER_BTN, _PRIMARY_BTN, _SECONDARY_BTN, _TAB_BTN, _TAB_BTN_ACTIVE
 from frontend.styles._calendar_styles import date_popup_styles
 from frontend.styles.page_styles import (
     card_shell_style,
@@ -134,25 +135,80 @@ _BG_BASE_STYLE = f"background: {_BG_BASE};"
 _DETAIL_LABEL_STYLE = text_style(_TEXT_PRI, size=FONT_SIZE_SUBHEAD)
 _TABLE_HEADER_SEP_STYLE = divider_style(_BORDER_DIM)
 _TABLE_COMPACT_STYLE = f"""
-QTableWidget {{ background: transparent; border: none; outline: none; }}
+QTableWidget {{
+    background: {_BG_SURFACE};
+    border: {SPACE_XXXS}px solid {_BORDER_DIM};
+    outline: none;
+    gridline-color: {_BORDER_DIM};
+    alternate-background-color: {_BG_RAISED};
+}}
 QTableWidget::item {{
-    padding: {SPACE_SM}px {SPACE_SM}px; border: none;
+    padding: {SPACE_SM}px {SPACE_SM}px;
+    border-right: {SPACE_XXXS}px solid {_BORDER_DIM};
+    border-bottom: {SPACE_XXXS}px solid {_BORDER_DIM};
+    color: {_TEXT_PRI};
 }}
 QTableWidget::item:selected {{
-    background-color: {_ACCENT_BG_15}; color: {_TEXT_PRI};
+    background-color: {_ACCENT_BG_15};
+    color: {_TEXT_PRI};
 }}
 QHeaderView::section {{
-    background-color: transparent; color: {_TEXT_SEC};
-    padding: {SPACE_10}px {SPACE_LG}px; border: none;
+    background-color: {_BG_RAISED};
+    color: {_TEXT_SEC};
+    padding: {SPACE_10}px {SPACE_LG}px;
+    border: none;
+    border-right: {SPACE_XXXS}px solid {_BORDER_DIM};
+    border-bottom: {SPACE_XXXS}px solid {_BORDER_DIM};
     font-weight: {FONT_WEIGHT_SEMIBOLD}; font-size: {FONT_SIZE_CAPTION}px; letter-spacing: 0.{SPACE_5}px;
 }}
 """
 _DETAIL_TEXT_STYLE = f"""
-QTextEdit {{
-    background: transparent; border: none;
-    color: {_TEXT_PRI}; padding: {SPACE_MD}px;
+QPlainTextEdit {{
+    background: {_BG_BASE};
+    border: {SPACE_XXXS}px solid {_BORDER_DIM};
+    border-radius: 0px;
+    color: {_TEXT_PRI};
+    padding: {SPACE_MD}px;
     font-family: 'Consolas', 'Courier New', monospace;
     font-size: {FONT_SIZE_LABEL}px;
+}}
+QPlainTextEdit:focus {{
+    border-color: {_ACCENT};
+}}
+"""
+_DETAIL_TABLE_STYLE = f"""
+QTableWidget {{
+    background: {_BG_SURFACE};
+    border: {SPACE_XXXS}px solid {_BORDER_DIM};
+    outline: none;
+    gridline-color: {_BORDER_DIM};
+    alternate-background-color: {_BG_RAISED};
+}}
+QTableWidget::item {{
+    padding: {SPACE_SM}px {SPACE_MD}px;
+    border-right: {SPACE_XXXS}px solid {_BORDER_DIM};
+    border-bottom: {SPACE_XXXS}px solid {_BORDER_DIM};
+    color: {_TEXT_PRI};
+}}
+QTableWidget::item:selected {{
+    background-color: {_ACCENT_BG_15};
+    color: {_TEXT_PRI};
+}}
+QHeaderView::section {{
+    background-color: {_BG_RAISED};
+    color: {_TEXT_SEC};
+    padding: {SPACE_10}px {SPACE_MD}px;
+    border: none;
+    border-right: {SPACE_XXXS}px solid {_BORDER_DIM};
+    border-bottom: {SPACE_XXXS}px solid {_BORDER_DIM};
+    font-weight: {FONT_WEIGHT_SEMIBOLD};
+    font-size: {FONT_SIZE_CAPTION}px;
+}}
+"""
+_DETAIL_TABS_STYLE = f"""
+QWidget#DetailsStackWrap {{
+    border: none;
+    background: transparent;
 }}
 """
 
@@ -161,6 +217,8 @@ class LogsViewerPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet(_STYLESHEET)
+        self._settings = QSettings("SmartEye", "LogsViewer")
+        self._is_active = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -388,7 +446,9 @@ class LogsViewerPage(QWidget):
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._table.verticalHeader().setVisible(False)
         self._table.verticalHeader().setDefaultSectionSize(SIZE_CONTROL_LG)
-        self._table.setShowGrid(False)
+        self._table.setShowGrid(True)
+        self._table.setAlternatingRowColors(True)
+        self._table.setWordWrap(False)
         self._table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._table.setStyleSheet(_TABLE_COMPACT_STYLE)
         self._table.currentCellChanged.connect(self._on_row_selected)
@@ -425,14 +485,52 @@ class LogsViewerPage(QWidget):
         det_sep.setStyleSheet(_TABLE_HEADER_SEP_STYLE)
         detail_vbox.addWidget(det_sep)
 
-        self._detail_text = QTextEdit()
+        self._details_tab_buttons: list[QPushButton] = []
+        for idx, label in enumerate(("Table", "JSON")):
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setStyleSheet(_TAB_BTN_ACTIVE if idx == 0 else _TAB_BTN)
+            btn.clicked.connect(lambda _c=False, i=idx: self._set_details_tab(i))
+            btn.setFixedHeight(SIZE_CONTROL_MD)
+            det_hdr_l.addWidget(btn)
+            self._details_tab_buttons.append(btn)
+
+        stack_wrap = QWidget()
+        stack_wrap.setObjectName("DetailsStackWrap")
+        stack_wrap.setStyleSheet(_DETAIL_TABS_STYLE)
+        stack_layout = QVBoxLayout(stack_wrap)
+        stack_layout.setContentsMargins(0, 0, 0, 0)
+        stack_layout.setSpacing(0)
+
+        self._details_stack = QStackedWidget()
+        stack_layout.addWidget(self._details_stack)
+
+        self._detail_table = QTableWidget()
+        self._detail_table.setColumnCount(2)
+        self._detail_table.setHorizontalHeaderLabels(["Field", "Value"])
+        self._detail_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._detail_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._detail_table.setShowGrid(True)
+        self._detail_table.setAlternatingRowColors(True)
+        self._detail_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._detail_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._detail_table.verticalHeader().setVisible(False)
+        self._detail_table.verticalHeader().setDefaultSectionSize(SIZE_CONTROL_LG)
+        _det_hdr = self._detail_table.horizontalHeader()
+        _det_hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        _det_hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self._detail_table.setStyleSheet(_DETAIL_TABLE_STYLE)
+        self._details_stack.addWidget(self._detail_table)
+
+        self._detail_text = QPlainTextEdit()
         self._detail_text.setReadOnly(True)
+        self._detail_text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self._detail_text.setStyleSheet(_DETAIL_TEXT_STYLE)
-        detail_vbox.addWidget(self._detail_text)
+        self._details_stack.addWidget(self._detail_text)
+        detail_vbox.addWidget(stack_wrap)
         splitter.addWidget(detail_card)
 
-        _qs = QSettings("SmartEye", "LogsViewer")
-        _saved = _qs.value("splitter/sizes")
+        _saved = self._settings.value("splitter/sizes")
         if _saved and len(_saved) == 2:
             try:
                 splitter.setSizes([int(_saved[0]), int(_saved[1])])
@@ -440,18 +538,28 @@ class LogsViewerPage(QWidget):
                 splitter.setSizes([600, 200])
         else:
             splitter.setSizes([600, 200])
-        splitter.splitterMoved.connect(lambda _pos, _idx: _qs.setValue("splitter/sizes", splitter.sizes()))
+        splitter.splitterMoved.connect(lambda _pos, _idx: self._settings.setValue("splitter/sizes", splitter.sizes()))
         layout.addWidget(splitter)
 
         self._logs_data = []
         self._auto_timer = QTimer(self)
         self._auto_timer.timeout.connect(self._refresh)
 
+        saved_auto = bool(self._settings.value("auto_refresh/enabled", False, type=bool))
+        with QSignalBlocker(self._auto_refresh):
+            self._auto_refresh.setChecked(saved_auto)
+        saved_tab = int(self._settings.value("details/current_tab", 0, type=int) or 0)
+        self._set_details_tab(0 if saved_tab not in (0, 1) else saved_tab)
+
     def on_activated(self):
+        self._is_active = True
         self._refresh_cameras()
+        if self._auto_refresh.isChecked():
+            self._auto_timer.start(3000)
         self._refresh()
 
     def on_deactivated(self):
+        self._is_active = False
         self._auto_timer.stop()
 
     def _refresh_cameras(self):
@@ -461,10 +569,20 @@ class LogsViewerPage(QWidget):
             self._camera_combo.addItem(cam["name"], cam["id"])
 
     def _toggle_auto_refresh(self, checked):
-        if checked:
+        self._settings.setValue("auto_refresh/enabled", bool(checked))
+        if checked and self._is_active:
             self._auto_timer.start(3000)
         else:
             self._auto_timer.stop()
+
+    def _set_details_tab(self, index: int):
+        idx = 0 if index not in (0, 1) else index
+        self._details_stack.setCurrentIndex(idx)
+        for i, btn in enumerate(self._details_tab_buttons):
+            with QSignalBlocker(btn):
+                btn.setChecked(i == idx)
+                btn.setStyleSheet(_TAB_BTN_ACTIVE if i == idx else _TAB_BTN)
+        self._settings.setValue("details/current_tab", idx)
 
     def _refresh(self):
         date_range = normalize_date_range(qdate_to_date(self._date_from.date()), qdate_to_date(self._date_to.date()))
@@ -531,6 +649,7 @@ class LogsViewerPage(QWidget):
 
     def _on_row_selected(self, row, col, _prev_row, _prev_col):
         if row < 0 or row >= len(self._logs_data):
+            self._detail_table.setRowCount(0)
             self._detail_text.clear()
             return
         log = self._logs_data[row]
@@ -539,7 +658,110 @@ class LogsViewerPage(QWidget):
         if isinstance(detections, str):
             with contextlib.suppress(Exception):
                 details["detections"] = json.loads(detections)
-        self._detail_text.setText(json.dumps(details, indent=2, default=str))
+        self._populate_detail_table(details)
+        self._detail_text.setPlainText(json.dumps(details, indent=2, default=str))
+
+    def _populate_detail_table(self, details: dict):
+        rows: list[tuple[str, str]] = []
+        detections = details.get("detections") if isinstance(details.get("detections"), dict) else {}
+        noisy_tokens = (
+            "bbox",
+            "box",
+            "xyxy",
+            "coordinate",
+            "landmark",
+            "embedding",
+            "vector",
+            "feature",
+            "tensor",
+            "raw",
+            "mask",
+        )
+
+        def _as_text(value) -> str:
+            if value is None or value == "":
+                return "-"
+            if isinstance(value, (dict, list)):
+                return json.dumps(value, default=str)
+            return str(value)
+
+        def _looks_noisy(name: str) -> bool:
+            lower = str(name).strip().lower()
+            return any(token in lower for token in noisy_tokens)
+
+        def _summary_for_value(name: str, value):
+            if _looks_noisy(name):
+                return None
+            if isinstance(value, list):
+                if not value:
+                    return "-"
+                if all(isinstance(item, dict) for item in value):
+                    labels: list[str] = []
+                    for item in value:
+                        label = str(item.get("label") or item.get("class") or item.get("name") or "Object")
+                        conf = item.get("conf")
+                        if isinstance(conf, (int, float)):
+                            labels.append(f"{label} ({int(float(conf) * 100)}%)")
+                        else:
+                            labels.append(label)
+                    shown = labels[:3]
+                    more = len(labels) - len(shown)
+                    text = ", ".join(shown)
+                    if more > 0:
+                        text = f"{text} +{more} more"
+                    return text
+                if len(value) > 8:
+                    return f"{len(value)} items"
+                return ", ".join(str(v) for v in value)
+            if isinstance(value, dict):
+                simple_parts: list[str] = []
+                for k, v in value.items():
+                    if _looks_noisy(k):
+                        continue
+                    if isinstance(v, (str, int, float, bool)):
+                        clean_k = str(k).replace("_", " ").strip().title()
+                        simple_parts.append(f"{clean_k}: {v}")
+                return " | ".join(simple_parts[:4]) if simple_parts else None
+            return _as_text(value)
+
+        def _field(label: str, value) -> None:
+            summary = _summary_for_value(label, value)
+            if summary is None:
+                return
+            rows.append((label, summary))
+
+        cam_name = "-"
+        with contextlib.suppress(Exception):
+            cam = db.get_camera(details.get("camera_id"))
+            if cam and cam.get("name"):
+                cam_name = str(cam.get("name"))
+
+        _field("Log ID", details.get("id"))
+        _field("Time", details.get("timestamp"))
+        _field("Camera", cam_name)
+        _field("Identity", details.get("identity"))
+        _field("Violation", "Yes" if (details.get("alarm_level", 0) or 0) > 0 else "No")
+        _field("Snapshot", os.path.basename(str(details.get("snapshot_path") or "")) or "-")
+
+        if detections:
+            for key, value in detections.items():
+                clean = str(key).replace("_", " ").strip().title()
+                _field(f"Detection {clean}", value)
+
+        for key, value in details.items():
+            if key in {"id", "timestamp", "camera_id", "identity", "alarm_level", "snapshot_path", "detections"}:
+                continue
+            clean = str(key).replace("_", " ").strip().title()
+            _field(clean, value)
+
+        self._detail_table.setRowCount(len(rows))
+        for idx, (field, value) in enumerate(rows):
+            field_item = self._cell(field)
+            value_item = self._cell(value)
+            field_item.setForeground(QColor(_TEXT_SEC))
+            value_item.setForeground(QColor(_TEXT_PRI))
+            self._detail_table.setItem(idx, 0, field_item)
+            self._detail_table.setItem(idx, 1, value_item)
 
     def _delete_selected(self):
         rows = {item.row() for item in self._table.selectedIndexes()}

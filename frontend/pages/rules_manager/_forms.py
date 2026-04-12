@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -19,11 +20,11 @@ from PySide6.QtWidgets import (
 )
 
 from backend.repository import db
+from frontend.app_theme import safe_set_point_size
 from frontend.services.rules_service import RulesService
 from frontend.widgets.confirm_delete_button import ConfirmDeleteButton
 from frontend.widgets.toggle_switch import ToggleSwitch
 from frontend.widgets.action_feedback import make_manager_footer_layout
-from frontend.styles._colors import _SUCCESS_BG_10, _SUCCESS_BG_20
 from frontend.styles._banner_styles import make_edit_banner
 from ._widgets import build_rule_header
 from frontend.styles._input_styles import _FORM_INPUT_TITLE, _FORM_INPUTS
@@ -59,11 +60,12 @@ from frontend.ui_tokens import (
 
 from ._constants import (
     _ADD_BTN_BLUE,
+    _BG_RAISED,
     _BG_SURFACE,
     _BORDER,
     _BORDER_DIM,
     _PRIMARY_BTN,
-    _SUCCESS,
+    _TEXT_PRI,
     _TEXT_BTN_BLUE,
     _TEXT_BTN_GHOST,
     _TEXT_BTN_RED,
@@ -445,23 +447,23 @@ class NewRulePanel(_BaseRuleForm):
 
     def _make_banner(self) -> QWidget:
         banner = QFrame()
-        banner.setStyleSheet(f"""
-            QFrame {{
-                background:{_SUCCESS_BG_10};
-                border-bottom:{SPACE_XXXS}px solid {_SUCCESS_BG_20};
-                border-top:none;border-left:none;border-right:none;
-            }}
-        """)
+        banner.setStyleSheet(f"QFrame{{background:{_BG_RAISED};border:none;}}")
         bi = QHBoxLayout(banner)
-        bi.setContentsMargins(SPACE_XL, SPACE_SM, SPACE_XL, SPACE_SM)
+        bi.setContentsMargins(SPACE_20, SPACE_14, SPACE_20, SPACE_14)
         bi.setSpacing(SPACE_SM)
-        dot = QLabel("\u25cf")
-        dot.setStyleSheet(f"color:{_SUCCESS};font-size:{FONT_SIZE_7}px;background:transparent;")
-        bi.addWidget(dot)
-        lbl = QLabel("New Rule \u2014 fill in the details and click Save")
-        lbl.setStyleSheet(f"color:{_SUCCESS};font-size:{FONT_SIZE_CAPTION}px;background:transparent;")
+        nf = QFont()
+        safe_set_point_size(nf, FONT_SIZE_CAPTION)
+        nf.setBold(True)
+        lbl = QLabel("Add Rule")
+        lbl.setFont(nf)
+        lbl.setStyleSheet(f"color:{_TEXT_PRI};")
         bi.addWidget(lbl)
         bi.addStretch()
+        close_x = QPushButton("✕")
+        close_x.setFixedSize(SIZE_CONTROL_MD, SIZE_CONTROL_MD)
+        close_x.setStyleSheet(_TEXT_BTN_GHOST)
+        close_x.clicked.connect(lambda: self.close_requested.emit())
+        bi.addWidget(close_x)
         return banner
 
     def _populate_body(self, body_l: QVBoxLayout):
