@@ -3,7 +3,10 @@ from backend.pipeline.rule_engine import evaluate_rules
 from backend.pipeline.zone_filter import filter_detections_by_zone
 
 
-def build_state(detection_results, camera_id, frame_w, frame_h):
+def build_state(detection_results, camera_id, frame_w, frame_h, evaluate_rule_triggers=True):
+    if not evaluate_rule_triggers:
+        return merge_results(detection_results, camera_id), []
+
     zone_results = filter_detections_by_zone(detection_results, camera_id, frame_w, frame_h)
     all_triggered = []
     seen_rule_ids = set()
