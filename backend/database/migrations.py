@@ -5,7 +5,7 @@ import secrets
 import uuid
 
 
-CURRENT_VERSION = 22
+CURRENT_VERSION = 24
 
 
 def apply(conn):
@@ -55,7 +55,58 @@ def apply(conn):
         _migrate_v21(conn)
     if version < 22:
         _migrate_v22(conn)
+    if version < 23:
+        _migrate_v23(conn)
+    if version < 24:
+        _migrate_v24(conn)
     conn.execute(f"PRAGMA user_version = {CURRENT_VERSION}")
+    conn.commit()
+
+
+def _migrate_v24(conn):
+    row = conn.execute("SELECT value FROM app_settings WHERE key='bootstrap_password_active'").fetchone()
+    active = bool(row and str(row[0]).strip().lower() in ("1", "true", "yes", "on"))
+    if not active:
+        conn.commit()
+        return
+    bootstrap_admin = conn.execute(
+        "SELECT id FROM accounts WHERE LOWER(TRIM(email))='admin@smarteye.local' LIMIT 1"
+    ).fetchone()
+    if bootstrap_admin:
+        conn.commit()
+        return
+    conn.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+        ("bootstrap_password_active", "0", "bool", "Bootstrap Password Active", "security"),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+        ("bootstrap_token", "", "string", "Bootstrap Token", "security"),
+    )
+    conn.commit()
+
+
+def _migrate_v23(conn):
+    settings = [
+        ("remember_login", "0", "bool", "Keep Me Logged In", "security"),
+        ("remember_email", "", "string", "Remembered Email", "security"),
+        ("remember_account_id", "", "string", "Remembered Account Id", "security"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
+    conn.execute(
+        "UPDATE app_settings SET value = CASE "
+        "WHEN LOWER(TRIM(COALESCE(value, ''))) IN ('1', 'true', 'yes', 'on') THEN '1' "
+        "ELSE '0' END "
+        "WHERE key='remember_login'"
+    )
     conn.commit()
 
 

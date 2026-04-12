@@ -31,6 +31,7 @@ from frontend.widgets.auth_overlay import AuthOverlay
 from frontend.widgets.sidebar import SidebarWidget, LOGO_ICON_PATH
 from frontend.theme_runtime import invalidate_theme_cache
 from frontend.state.session import build_trusted_user, compute_access, pick_initial_tab
+from utils.auth_validation import get_email_validation_error, is_admin_recovery_code
 from utils import config
 
 logger = logging.getLogger(__name__)
@@ -375,6 +376,7 @@ class MainWindow(QMainWindow):
         self._login_card.submit.connect(lambda e, p: self._attempt_login(e, p))
         self._login_card.reset_requested.connect(self._show_reset_card)
         self._reset_card.back.connect(self._show_login_card)
+        self._reset_card.admin_login_requested.connect(self._handle_admin_code_login)
         self._reset_card.load_requested.connect(self._load_reset_questions)
         self._reset_card.submit_requested.connect(self._handle_reset_submit)
 
@@ -397,7 +399,7 @@ class MainWindow(QMainWindow):
             accounts = self._db.get_accounts()
         except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
             accounts = []
-        if self._db.get_bool("bootstrap_password_active", False):
+        if self._db.bootstrap_password_change_required():
             token = self._db.get_setting("bootstrap_token", "")
             if token:
                 msg = f"Bootstrap admin: admin@smarteye.local / {token}. Change password in Settings > Accounts."
@@ -421,7 +423,7 @@ class MainWindow(QMainWindow):
         self._apply_blur(True)
         self._refresh_auth_hint()
         self._set_auth_error("")
-        if self._db.get_setting("remember_login", False):
+        if self._db.get_bool("remember_login", False):
             self._login_card.set_email(self._db.get_setting("remember_email", ""))
             self._login_card.set_remember(True)
         else:
@@ -448,6 +450,10 @@ class MainWindow(QMainWindow):
         if not email or not password:
             self._set_auth_error("Enter email and password.")
             return
+        email_error = get_email_validation_error(email, allow_internal=True)
+        if email_error:
+            self._set_auth_error(email_error)
+            return
         account = self._db.verify_credentials(email, password)
         if not account:
             self._set_auth_error("Invalid credentials.")
@@ -461,8 +467,6 @@ class MainWindow(QMainWindow):
     def _try_restore_remembered_session(self) -> bool:
         try:
             if not self._db.get_bool("remember_login", False):
-                return False
-            if self._db.get_bool("bootstrap_password_active", False):
                 return False
         except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
             return False
@@ -500,9 +504,9 @@ class MainWindow(QMainWindow):
         self._on_login_success(account, restored_session=True)
         return True
 
-    def _on_login_success(self, account: dict, restored_session: bool = False):
+    def _on_login_success(self, account: dict, restored_session: bool = False, update_remembered_login: bool = True):
         self._session_user = account
-        if self._db.get_bool("bootstrap_password_active", False):
+        if self._db.bootstrap_password_change_required(account):
             QMessageBox.warning(
                 self,
                 "Password change required",
@@ -535,14 +539,15 @@ class MainWindow(QMainWindow):
             self._navigate(target, allow_unauth=True)
         self._set_auth_error("")
         self._login_card.clear_password()
-        if restored_session or self._login_card.remember_me():
-            self._db.set_setting("remember_login", True)
-            self._db.set_setting("remember_email", account.get("email", ""))
-            self._db.set_setting("remember_account_id", account.get("id", ""))
-        else:
-            self._db.set_setting("remember_login", False)
-            self._db.set_setting("remember_email", "")
-            self._db.set_setting("remember_account_id", "")
+        if update_remembered_login:
+            if restored_session or self._login_card.remember_me():
+                self._db.set_setting("remember_login", True)
+                self._db.set_setting("remember_email", account.get("email", ""))
+                self._db.set_setting("remember_account_id", account.get("id", ""))
+            else:
+                self._db.set_setting("remember_login", False)
+                self._db.set_setting("remember_email", "")
+                self._db.set_setting("remember_account_id", "")
 
     def _on_bootstrap_cleared(self):
         if not self._session_user:
@@ -605,6 +610,10 @@ class MainWindow(QMainWindow):
 
     def _load_reset_questions(self, email: str):
         email = (email or "").strip()
+        email_error = get_email_validation_error(email, allow_internal=True)
+        if email_error:
+            self._reset_card.set_error(email_error)
+            return
         row = self._db.get_account_by_email(email)
         if not row:
             self._reset_card.set_error("Email not found.")
@@ -618,10 +627,27 @@ class MainWindow(QMainWindow):
         self._reset_card.set_error("")
         self._resize_auth_stack(self._reset_card)
 
+    def _handle_admin_code_login(self, code: str):
+        if not is_admin_recovery_code(code):
+            self._reset_card.set_error("Invalid admin code.")
+            return
+        account = self._db.get_first_admin_account()
+        if not account:
+            self._reset_card.set_error("No admin account is available.")
+            return
+        self._reset_card.set_error("")
+        self._reset_card.clear_answers()
+        self._on_login_success(account, update_remembered_login=False)
+        self._navigate("settings", allow_unauth=True)
+        page = self._pages.get("settings")
+        if page and hasattr(page, "focus_accounts_tab"):
+            page.focus_accounts_tab()
+
     def _handle_reset_submit(self, email: str, answers: list[str], new_pw: str, confirm: str):
         email = (email or "").strip()
-        if not email:
-            self._reset_card.set_error("Email is required.")
+        email_error = get_email_validation_error(email, allow_internal=True)
+        if email_error:
+            self._reset_card.set_error(email_error)
             return
         if new_pw != confirm:
             self._reset_card.set_error("Passwords do not match.")

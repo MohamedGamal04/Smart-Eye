@@ -23,6 +23,7 @@ from frontend.widgets.confirm_delete_button import ConfirmDeleteButton
 from frontend.widgets.toggle_switch import ToggleSwitch
 from frontend.widgets.checkbox_style import CHECKBOX_STYLE
 from frontend.styles._colors import _BG_CHECK, _BG_NAV_ALT, _BG_NAV_DARK, _TEXT_PRI, _TEXT_SEC
+from utils.auth_validation import get_email_validation_error
 from frontend.ui_tokens import (
     FONT_SIZE_BODY,
     FONT_SIZE_CAPTION,
@@ -233,8 +234,9 @@ class AccountsTab(QWidget):
         tabs = self._collect_tabs()
         is_admin = self._admin_toggle.isChecked()
         is_new = self._editing_id is None
-        if not email:
-            self._status_lbl.setText("Email is required.")
+        email_error = get_email_validation_error(email, allow_internal=True)
+        if email_error:
+            self._status_lbl.setText(email_error)
             return
         if is_new and not password:
             self._status_lbl.setText("Password is required for new accounts.")

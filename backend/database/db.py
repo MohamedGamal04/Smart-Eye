@@ -10,6 +10,8 @@ import uuid
 import queue
 from datetime import datetime
 
+from utils.auth_validation import get_email_validation_error
+
 
 _write_lock = threading.RLock()
 
@@ -203,6 +205,55 @@ def _normalize_email(email: str) -> str:
     return (email or "").strip().lower()
 
 
+def is_bootstrap_admin_email(email: str) -> bool:
+    return _normalize_email(email) == _DEFAULT_ADMIN_EMAIL
+
+
+def get_bootstrap_admin_account():
+    row = _conn.execute("SELECT * FROM accounts WHERE email=?", (_DEFAULT_ADMIN_EMAIL,)).fetchone()
+    return _row_to_account(row) if row else None
+
+
+def reconcile_bootstrap_state() -> bool:
+    active = get_bool("bootstrap_password_active", False)
+    if not active:
+        return False
+    bootstrap_account = get_bootstrap_admin_account()
+    if bootstrap_account:
+        return True
+    _clear_bootstrap_token()
+    return False
+
+
+def bootstrap_password_change_required(account=None) -> bool:
+    if not reconcile_bootstrap_state():
+        return False
+    if account is None:
+        return True
+    email = account.get("email", "") if isinstance(account, dict) else str(account or "")
+    return is_bootstrap_admin_email(email)
+
+
+def _infer_setting_type(value) -> str:
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int) and not isinstance(value, bool):
+        return "int"
+    if isinstance(value, float):
+        return "float"
+    if isinstance(value, (list, tuple, dict)):
+        return "json"
+    return "string"
+
+
+def _serialize_setting_value(value, vtype: str) -> str:
+    if vtype == "bool":
+        return "1" if _as_bool(value, False) else "0"
+    if vtype == "json":
+        return json.dumps(value)
+    return "" if value is None else str(value)
+
+
 def _normalize_tabs(tabs):
     if not tabs:
         return []
@@ -331,6 +382,9 @@ def ensure_default_account():
 
 
 def create_account(email: str, password: str, allowed_tabs=None, is_admin: bool = False, security=None, avatar_path: str = ""):
+    err = get_email_validation_error(email, allow_internal=True)
+    if err:
+        raise ValueError(err)
     sec_questions, sec_answers = security or ([], [])
     salt, pw_hash = _hash_password(password)
     sec_salt = secrets.token_hex(16)
@@ -368,10 +422,14 @@ def create_account(email: str, password: str, allowed_tabs=None, is_admin: bool 
 
 
 def update_account(account_id: int, *, email=None, password=None, allowed_tabs=None, is_admin=None, security=None, avatar_path=None):
+    current = get_account(account_id)
     sets = []
     vals = []
     password_updated = False
     if email is not None:
+        err = get_email_validation_error(email, allow_internal=True)
+        if err:
+            raise ValueError(err)
         sets.append("email=?")
         vals.append(_normalize_email(email))
     if password is not None:
@@ -407,12 +465,21 @@ def update_account(account_id: int, *, email=None, password=None, allowed_tabs=N
         return
     vals.append(account_id)
     _write_execute(f"UPDATE accounts SET {', '.join(sets)} WHERE id=?", vals)
-    if password_updated and get_bool("bootstrap_password_active", False):
+    current_email = current.get("email", "") if current else ""
+    updated_email = email if email is not None else current_email
+    if (
+        reconcile_bootstrap_state()
+        and (password_updated or updated_email != current_email)
+        and (is_bootstrap_admin_email(current_email) or is_bootstrap_admin_email(updated_email))
+    ):
         _clear_bootstrap_token()
 
 
 def delete_account(account_id: int):
+    account = get_account(account_id)
     _write_execute("DELETE FROM accounts WHERE id=?", (account_id,))
+    if account and is_bootstrap_admin_email(account.get("email", "")):
+        _clear_bootstrap_token()
 
 
 def get_accounts():
@@ -428,6 +495,11 @@ def get_account(account_id: int):
 def get_account_by_email(email: str):
     row = _conn.execute("SELECT * FROM accounts WHERE email=?", (_normalize_email(email),)).fetchone()
     return row
+
+
+def get_first_admin_account():
+    row = _conn.execute("SELECT * FROM accounts WHERE is_admin=1 ORDER BY id LIMIT 1").fetchone()
+    return _row_to_account(row) if row else None
 
 
 def verify_credentials(email: str, password: str):
@@ -464,6 +536,9 @@ def verify_security_answers(email: str, answers: list[str]):
 def set_password(account_id: int, new_password: str):
     salt, pw_hash = _hash_password(new_password)
     _write_execute("UPDATE accounts SET password_hash=?, salt=? WHERE id=?", (pw_hash, salt, account_id))
+    account = get_account(account_id)
+    if account and reconcile_bootstrap_state() and is_bootstrap_admin_email(account.get("email", "")):
+        _clear_bootstrap_token()
 
 
 def touch_last_login(account_id: int):
@@ -1218,18 +1293,18 @@ def set_setting(key, value):
     def _op(conn):
         row = conn.execute("SELECT type FROM app_settings WHERE key=?", (key,)).fetchone()
         if row:
-            vtype = row["type"]
-            if vtype == "bool":
-                v = "1" if value in (True, 1, "1", "true", "yes") else "0"
-            elif vtype == "json":
-                v = json.dumps(value)
-            else:
-                v = str(value)
-            conn.execute("UPDATE app_settings SET value=? WHERE key=?", (v, key))
-        else:
+            vtype = (row["type"] or "").strip().lower() or _infer_setting_type(value)
+            v = _serialize_setting_value(value, vtype)
             conn.execute(
-                "INSERT INTO app_settings (key, value) VALUES (?, ?)",
-                (key, str(value)),
+                "UPDATE app_settings SET value=?, type=CASE WHEN type IS NULL OR type='' THEN ? ELSE type END WHERE key=?",
+                (v, vtype, key),
+            )
+        else:
+            vtype = _infer_setting_type(value)
+            v = _serialize_setting_value(value, vtype)
+            conn.execute(
+                "INSERT INTO app_settings (key, value, type) VALUES (?, ?, ?)",
+                (key, v, vtype),
             )
         conn.commit()
 
