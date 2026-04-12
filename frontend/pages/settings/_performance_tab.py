@@ -108,26 +108,40 @@ class PerformanceTab(QWidget):
             )
         )
 
-        bl.addWidget(_make_sdiv("CPU & Threads"))
-
-        self._max_threads = QSpinBox()
-        self._max_threads.setRange(1, 32)
-        self._max_threads.setValue(4)
-        self._max_threads.setFixedHeight(_FIELD_H)
-        bl.addWidget(
-            _srow(
-                "Max threads",
-                self._max_threads,
-                hint="Worker threads used for inference. Match to physical core count.",
-            )
-        )
+        bl.addWidget(_make_sdiv("Resource Limits"))
 
         self._limit_resources = ToggleSwitch()
+        self._limit_resources.toggled.connect(self._sync_resource_controls)
         bl.addWidget(
             _srow(
                 "Limit resource usage",
                 self._limit_resources,
-                hint="Reduces thread count and lowers process priority to keep the system responsive.",
+                hint="Enable hard caps for app CPU and memory consumption.",
+            )
+        )
+
+        self._max_cpu_cores = QSpinBox()
+        self._max_cpu_cores.setRange(1, 128)
+        self._max_cpu_cores.setValue(2)
+        self._max_cpu_cores.setFixedHeight(_FIELD_H)
+        bl.addWidget(
+            _srow(
+                "Max CPU cores",
+                self._max_cpu_cores,
+                hint="Restricts process CPU affinity to this many logical cores when limits are enabled.",
+            )
+        )
+
+        self._max_ram_mb = QSpinBox()
+        self._max_ram_mb.setRange(256, 262144)
+        self._max_ram_mb.setValue(4096)
+        self._max_ram_mb.setSuffix(" MB")
+        self._max_ram_mb.setFixedHeight(_FIELD_H)
+        bl.addWidget(
+            _srow(
+                "Max RAM",
+                self._max_ram_mb,
+                hint="Attempts to cap this process working set. Applies best-effort per OS.",
             )
         )
 
@@ -158,20 +172,6 @@ class PerformanceTab(QWidget):
                 hint="Run inference every N display frames. "
                 "1 = lowest latency and tightest live tracking. "
                 "Higher values reduce compute load but increase visible bbox lag.",
-            )
-        )
-
-        bl.addWidget(_make_sdiv("Video"))
-
-        self._max_resolution = QComboBox()
-        self._max_resolution.setStyleSheet(_combo_ss())
-        self._max_resolution.addItems(["640x480", "1280x720", "1920x1080", "Original"])
-        self._max_resolution.setFixedHeight(_FIELD_H)
-        bl.addWidget(
-            _srow(
-                "Max resolution",
-                self._max_resolution,
-                hint="Frames are downscaled to this before inference. Lower = faster.",
             )
         )
 
@@ -262,11 +262,13 @@ class PerformanceTab(QWidget):
         # This allows copying config to another machine/GPU without losing intent.
         db.set_setting("face_onnx_provider_preference", face_pref)
         db.set_setting("plugin_onnx_provider_preference", plugin_pref)
-        db.set_setting("max_threads", str(self._max_threads.value()))
+        db.set_setting("max_cpu_cores", str(self._max_cpu_cores.value()))
+        db.set_setting("max_ram_mb", str(self._max_ram_mb.value()))
+        # Keep legacy key for components still keyed on max_threads.
+        db.set_setting("max_threads", str(self._max_cpu_cores.value()))
         db.set_setting("frame_skip", str(self._frame_skip.value()))
         db.set_setting("detection_interval", str(self._detection_interval.value()))
         db.set_setting("limit_resources", 1 if self._limit_resources.isChecked() else 0)
-        db.set_setting("max_resolution", self._max_resolution.currentText())
         db.set_setting("ui_pause_inactive_tabs", 1 if self._pause_tabs.isChecked() else 0)
         db.set_setting("ui_unload_on_leave", 1 if self._unload_tabs.isChecked() else 0)
         db.set_setting("ui_unload_idle_min", str(self._unload_idle_min.value()))
@@ -279,7 +281,8 @@ class PerformanceTab(QWidget):
 
             apply_limits(
                 bool(db.get_setting("limit_resources", False)),
-                int(db.get_setting("max_threads", 1)),
+                int(db.get_setting("max_cpu_cores", db.get_setting("max_threads", 1) or 1)),
+                int(db.get_setting("max_ram_mb", 4096) or 4096),
             )
         except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
             logger.exception("Failed to apply resource limits after save")
@@ -336,24 +339,28 @@ class PerformanceTab(QWidget):
         plugin_idx = self._plugin_provider.findData(plugin_pref)
         self._plugin_provider.setCurrentIndex(plugin_idx if plugin_idx >= 0 else 0)
 
-        self._max_threads.setValue(int(db.get_int("max_threads", 4) or 4))
+        self._max_cpu_cores.setValue(int(db.get_int("max_cpu_cores", db.get_int("max_threads", 2) or 2) or 2))
+        self._max_ram_mb.setValue(int(db.get_int("max_ram_mb", 4096) or 4096))
         self._frame_skip.setValue(int(db.get_int("frame_skip", 0) or 0))
         self._detection_interval.setValue(int(db.get_int("detection_interval", 1) or 1))
         self._limit_resources.setChecked(db.get_bool("limit_resources", False))
-        max_res = db.get_setting("max_resolution", "Original")
-        idx = self._max_resolution.findText(max_res)
-        self._max_resolution.setCurrentIndex(idx if idx >= 0 else 0)
 
         self._pause_tabs.setChecked(db.get_bool("ui_pause_inactive_tabs", True))
         self._unload_tabs.setChecked(db.get_bool("ui_unload_on_leave", True))
         self._unload_idle_min.setValue(int(db.get_int("ui_unload_idle_min", 5) or 5))
         self._auto_pause_live.setChecked(db.get_bool("auto_pause_live_when_idle", False))
         self._sync_provider_controls(self._gpu_toggle.isChecked())
+        self._sync_resource_controls(self._limit_resources.isChecked())
 
     def _sync_provider_controls(self, gpu_enabled: bool) -> None:
         # "Enable GPU" is the master guard for provider profile controls.
         self._face_provider.setEnabled(bool(gpu_enabled))
         self._plugin_provider.setEnabled(bool(gpu_enabled))
+
+    def _sync_resource_controls(self, limits_enabled: bool) -> None:
+        enabled = bool(limits_enabled)
+        self._max_cpu_cores.setEnabled(enabled)
+        self._max_ram_mb.setEnabled(enabled)
 
     def _get_supported_provider_prefs(self) -> list[str]:
         # These are preference keys (not ORT provider class names).

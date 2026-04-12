@@ -157,7 +157,7 @@ class GeneralTab(QWidget):
             _srow(
                 "Experimental settings",
                 self._experimental_toggle,
-                hint="Show the Experimental tab with in-development features such as ghost bbox tuning.",
+                hint="Show the Experimental tab with in-development features.",
             )
         )
 

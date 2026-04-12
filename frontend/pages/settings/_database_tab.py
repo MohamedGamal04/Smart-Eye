@@ -16,12 +16,16 @@ from PySide6.QtGui import (
     QRadialGradient,
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -30,6 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from backend.repository import db
+from frontend.dialogs import apply_popup_theme
 from frontend.styles._colors import (
     _ACCENT,
     _ACCENT_HI,
@@ -569,21 +574,8 @@ class _WaterTankWidget(QWidget):
         if e.button() != Qt.MouseButton.LeftButton:
             return
         pos = QPointF(e.position())
-        if self._confirming:
-            if self._confirm_ok_rect.contains(pos):
-                self._confirming = False
-                self._confirm_ok_hov = False
-                self._confirm_cancel_hov = False
-                self.start_drain()
-            elif self._confirm_cancel_rect.contains(pos):
-                self._confirming = False
-                self._confirm_ok_hov = False
-                self._confirm_cancel_hov = False
-                self.update()
-            return
         if self._valve_rect.contains(pos) and not self._draining:
-            self._confirming = True
-            self.update()
+            self.faucet_clicked.emit()
 
 
 class _PurgeWorker(QThread):
@@ -591,7 +583,12 @@ class _PurgeWorker(QThread):
 
     def run(self) -> None:
         try:
+            # Drain any in-flight queued writes before and after reset so one purge action is enough.
+            db.wait_for_writer_idle(5.0)
             db.reset_database()
+            db.wait_for_writer_idle(2.0)
+            db.reset_database()
+            db.wait_for_writer_idle(2.0)
             from backend.database.migrations import apply as _run_migrations
 
             _run_migrations(db.get_conn())
@@ -805,18 +802,121 @@ class DatabaseTab(QWidget):
             QMessageBox.warning(self, "Error", str(exc))
 
     def _on_faucet_clicked(self) -> None:
+        if self._purge_worker is not None:
+            return
+        if not self._confirm_admin_purge():
+            return
+        if not self._start_purge_worker():
+            return
+        self._tank.start_drain()
 
-        pass
-
-    def _on_drain_complete(self) -> None:
-
+    def _start_purge_worker(self) -> bool:
+        if not self._stop_active_cameras_for_purge():
+            return False
         self._current_bytes = 0
+        self._db_size_label.setText(_fmt_bytes(0))
         self._tank.set_data(0, 0)
         self._limit_status_label.setText("Purging database…")
-
+        QApplication.processEvents()
         self._purge_worker = _PurgeWorker(self)
         self._purge_worker.finished.connect(self._on_purge_done)
         self._purge_worker.start()
+        return True
+
+    def _stop_active_cameras_for_purge(self) -> bool:
+        try:
+            from backend.camera.camera_manager import get_camera_manager
+
+            get_camera_manager().stop_all()
+            return True
+        except (RuntimeError, AttributeError, TypeError, ValueError, OSError) as exc:
+            QMessageBox.warning(self, "Purge Blocked", f"Unable to stop active camera streams before purge:\n{exc}")
+            return False
+
+    def _confirm_admin_purge(self) -> bool:
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Confirm Database Purge")
+        dlg.setModal(True)
+        dlg.setFixedSize(SIZE_PANEL_W_LG, 300)
+        apply_popup_theme(
+            dlg,
+            f"""
+            QDialog QLabel {{
+                color: {_TEXT_PRI};
+                background: transparent;
+                font-size: {FONT_SIZE_BODY}px;
+            }}
+            QDialog QLineEdit {{
+                min-height: {_FIELD_H}px;
+                padding: 0 {SPACE_10}px;
+                font-size: {FONT_SIZE_LABEL}px;
+            }}
+            """,
+        )
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(SPACE_20, SPACE_20, SPACE_20, SPACE_20)
+        layout.setSpacing(SPACE_10)
+
+        title = QLabel("Administrator Confirmation Required")
+        title.setStyleSheet(
+            f"color: {_TEXT_PRI}; font-size: {FONT_SIZE_HEADING}px; font-weight: {FONT_WEIGHT_BOLD}; background: transparent;"
+        )
+        layout.addWidget(title)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        form.setFormAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        form.setHorizontalSpacing(SPACE_10)
+        form.setVerticalSpacing(SPACE_10)
+
+        email_edit = QLineEdit()
+        email_edit.setPlaceholderText("admin@smarteye.local")
+        password_edit = QLineEdit()
+        password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        password_edit.setPlaceholderText("Administrator password")
+
+        form.addRow("Admin Email", email_edit)
+        form.addRow("Password", password_edit)
+        layout.addLayout(form)
+
+        hint = QLabel("Purge will delete operational data only. Accounts and app settings are preserved.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color: {_TEXT_MUTED}; font-size: {FONT_SIZE_CAPTION}px;")
+        layout.addWidget(hint)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+
+        confirm_btn = QPushButton("Purge")
+        confirm_btn.setStyleSheet(_PRIMARY_BTN)
+        confirm_btn.setFixedWidth(SIZE_LABEL_W_LG)
+        confirm_btn.clicked.connect(dlg.accept)
+        btn_row.addWidget(confirm_btn)
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setStyleSheet(_SECONDARY_BTN)
+        cancel_btn.setFixedWidth(SIZE_LABEL_W_LG)
+        cancel_btn.clicked.connect(dlg.reject)
+        btn_row.addWidget(cancel_btn)
+
+        layout.addLayout(btn_row)
+
+        email_edit.setFocus()
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return False
+
+        email = email_edit.text().strip()
+        password = password_edit.text()
+        account = db.verify_credentials(email, password)
+        if not account or not bool(account.get("is_admin")):
+            QMessageBox.warning(self, "Authorization Failed", "Valid administrator credentials are required.")
+            return False
+        return True
+
+    def _on_drain_complete(self) -> None:
+        # Drain animation completion is visual-only; purge starts right after auth.
+        pass
 
     def _on_purge_done(self, success: bool, error_msg: str) -> None:
         self._purge_worker = None
@@ -828,6 +928,8 @@ class DatabaseTab(QWidget):
             pass
         if success:
             self._limit_status_label.setText("Database purged successfully (accounts preserved).")
+        QApplication.processEvents()
+        QTimer.singleShot(120, self.load)
 
     def _reset_db(self) -> None:
         try:

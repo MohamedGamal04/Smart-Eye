@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
     QGraphicsOpacityEffect,
@@ -28,7 +27,6 @@ from frontend.ui_tokens import (
 )
 
 from ._constants import (
-    _FIELD_H,
     _PRIMARY_BTN,
     _make_sdiv,
     _srow,
@@ -69,19 +67,6 @@ class DetectionTab(QWidget):
             )
         )
 
-        self._min_face_size = QSpinBox()
-        self._min_face_size.setRange(10, 500)
-        self._min_face_size.setValue(40)
-        self._min_face_size.setSuffix(" px")
-        self._min_face_size.setFixedHeight(_FIELD_H)
-        bl.addWidget(
-            _srow(
-                "Min face size",
-                self._min_face_size,
-                hint="Faces smaller than this (in pixels) are ignored. Raise to skip distant/small faces.",
-            )
-        )
-
         bl.addStretch()
         bl.addWidget(self._make_action_bar())
 
@@ -107,7 +92,6 @@ class DetectionTab(QWidget):
 
     def _save(self) -> None:
         db.set_setting("liveness_enabled", "1" if self._liveness_toggle.isChecked() else "0")
-        db.set_setting("min_face_size", str(self._min_face_size.value()))
         if db.get_bool("ui_show_save_popups", False):
             from PySide6.QtWidgets import QMessageBox
 
@@ -136,4 +120,3 @@ class DetectionTab(QWidget):
 
     def load(self) -> None:
         self._liveness_toggle.setChecked(db.get_bool("liveness_enabled", False))
-        self._min_face_size.setValue(int(db.get_setting("min_face_size", "40")))

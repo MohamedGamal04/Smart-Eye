@@ -91,6 +91,10 @@ class AccountsTab(QWidget):
         self._email_input.setPlaceholderText("user@example.com")
         self._email_input.setFixedHeight(_FIELD_H)
 
+        self._username_input = QLineEdit()
+        self._username_input.setPlaceholderText("Optional")
+        self._username_input.setFixedHeight(_FIELD_H)
+
         self._password_input = QLineEdit()
         self._password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self._password_input.setPlaceholderText("Set a password")
@@ -113,6 +117,7 @@ class AccountsTab(QWidget):
         avatar_row.addWidget(avatar_btn)
 
         bl.addWidget(_srow("Email", self._email_input))
+        bl.addWidget(_srow("Username", self._username_input))
         bl.addWidget(_srow("Password", self._password_input, hint="Required for new accounts. Leave blank to keep current password."))
         bl.addWidget(_srow("Confirm", self._confirm_input))
         bl.addWidget(_srow("Administrator", self._admin_toggle, hint="Admins can open every tab regardless of restrictions."))
@@ -204,6 +209,7 @@ class AccountsTab(QWidget):
         self._editing_id = None
         self._editing_account = None
         self._email_input.clear()
+        self._username_input.clear()
         self._password_input.clear()
         self._confirm_input.clear()
         self._admin_toggle.setChecked(False)
@@ -229,6 +235,7 @@ class AccountsTab(QWidget):
     def _handle_save(self):
         was_bootstrap = db.get_bool("bootstrap_password_active", False)
         email = self._email_input.text().strip()
+        username = self._username_input.text().strip()
         password = self._password_input.text()
         confirm = self._confirm_input.text()
         tabs = self._collect_tabs()
@@ -267,12 +274,21 @@ class AccountsTab(QWidget):
         avatar_path = self._avatar_path.text().strip()
         try:
             if is_new:
-                db.create_account(email, password, tabs, is_admin=is_admin, security=(questions, answers), avatar_path=avatar_path)
+                db.create_account(
+                    email,
+                    password,
+                    tabs,
+                    is_admin=is_admin,
+                    security=(questions, answers),
+                    avatar_path=avatar_path,
+                    username=username,
+                )
                 self._status_lbl.setText("Account created.")
             else:
                 db.update_account(
                     self._editing_id,
                     email=email,
+                    username=username,
                     password=password or None,
                     allowed_tabs=tabs,
                     is_admin=is_admin,
@@ -331,6 +347,14 @@ class AccountsTab(QWidget):
             f"QLabel {{ color: {_TEXT_PRI}; font-weight: {FONT_WEIGHT_SEMIBOLD}; font-size: {FONT_SIZE_BODY}px; background: transparent; border: none; }}"
         )
         info_col.addWidget(email_lbl)
+
+        username = (acc.get("username") or "").strip()
+        if username:
+            username_lbl = QLabel(f"@{username}")
+            username_lbl.setStyleSheet(
+                f"QLabel {{ color: {_TEXT_SEC}; font-size: {FONT_SIZE_CAPTION}px; background: transparent; border: none; }}"
+            )
+            info_col.addWidget(username_lbl)
 
         role = "Administrator" if acc.get("is_admin") else "Limited"
         role_lbl = QLabel(role)
@@ -409,6 +433,7 @@ class AccountsTab(QWidget):
         self._editing_id = acc.get("id")
         self._editing_account = acc
         self._email_input.setText(acc.get("email", ""))
+        self._username_input.setText(acc.get("username", "") or "")
         self._password_input.clear()
         self._confirm_input.clear()
         self._admin_toggle.setChecked(bool(acc.get("is_admin")))
