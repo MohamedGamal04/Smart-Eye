@@ -22,6 +22,7 @@ from frontend.styles._input_styles import _AUTH_INPUT_LG, _AUTH_INPUT_MD
 from frontend.styles._btn_styles import _PRIMARY_BTN, _SECONDARY_BTN
 from frontend.styles.page_styles import text_style
 from frontend.app_theme import safe_set_point_size
+from frontend.widgets.password_visibility import attach_password_visibility_toggle
 from frontend.ui_tokens import (
     FONT_SIZE_BODY,
     FONT_SIZE_LABEL,
@@ -124,6 +125,7 @@ class AuthResetCard(QFrame):
         self._admin_code.setEchoMode(QLineEdit.EchoMode.Password)
         self._admin_code.setFixedHeight(SIZE_CONTROL_MID)
         self._admin_code.setStyleSheet(_AUTH_INPUT_LG)
+        attach_password_visibility_toggle(self._admin_code)
         form.addWidget(self._admin_code)
 
         form.addSpacing(SPACE_20)
@@ -145,6 +147,7 @@ class AuthResetCard(QFrame):
             a.setPlaceholderText("Your answer")
             a.setFixedHeight(SIZE_CONTROL_38)
             a.setStyleSheet(_AUTH_INPUT_MD)
+            attach_password_visibility_toggle(a)
             self._a_edits.append(a)
             form.addWidget(a)
 
@@ -165,6 +168,7 @@ class AuthResetCard(QFrame):
         self._new_pw.setPlaceholderText("Enter new password")
         self._new_pw.setFixedHeight(SIZE_CONTROL_MID)
         self._new_pw.setStyleSheet(_AUTH_INPUT_LG)
+        attach_password_visibility_toggle(self._new_pw)
         form.addWidget(self._new_pw)
 
         form.addSpacing(SPACE_MD)
@@ -174,6 +178,7 @@ class AuthResetCard(QFrame):
         self._new_pw2.setPlaceholderText("Confirm new password")
         self._new_pw2.setFixedHeight(SIZE_CONTROL_MID)
         self._new_pw2.setStyleSheet(_AUTH_INPUT_LG)
+        attach_password_visibility_toggle(self._new_pw2)
         form.addWidget(self._new_pw2)
 
         form.addSpacing(SPACE_XL)

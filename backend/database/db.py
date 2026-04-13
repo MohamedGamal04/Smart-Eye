@@ -648,17 +648,6 @@ def get_camera_face_threshold(camera_id):
         return None
 
 
-def get_zones(camera_id=None, enabled_only=False):
-    q = "SELECT * FROM zones WHERE 1=1"
-    params = []
-    if camera_id is not None:
-        q += " AND camera_id=?"
-        params.append(camera_id)
-    if enabled_only:
-        q += " AND enabled=1"
-    return [dict(r) for r in _conn.execute(q, params).fetchall()]
-
-
 def add_plugin(name, model_type, weight_path, confidence=0.6, description="", version="1.0"):
     cur = _write_execute(
         "INSERT INTO model_plugins (name, model_type, weight_path, confidence, description, version) VALUES (?, ?, ?, ?, ?, ?)",
@@ -851,10 +840,10 @@ def remove_camera_plugin_class(camera_id, plugin_class_id):
     )
 
 
-def add_rule(name, description, logic, action, priority=0, camera_id=None, zone_id=None):
+def add_rule(name, description, logic, action, priority=0, camera_id=None):
     cur = _write_execute(
-        "INSERT INTO rules (name, description, logic, action, priority, camera_id, zone_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (name, description, logic, action, priority, camera_id, zone_id),
+        "INSERT INTO rules (name, description, logic, action, priority, camera_id) VALUES (?, ?, ?, ?, ?, ?)",
+        (name, description, logic, action, priority, camera_id),
     )
     try:
         from backend.pipeline import rule_engine
@@ -874,7 +863,6 @@ def update_rule(rule_id, **kwargs):
         "enabled",
         "priority",
         "camera_id",
-        "zone_id",
     }
     sets, vals = _build_update(allowed, kwargs)
     if not sets:
@@ -1072,6 +1060,10 @@ def delete_face_inbox(entry_id: int):
 def update_known_face(face_id, **kwargs):
     if not kwargs:
         return
+    if "gender" in kwargs and "gender_norm" not in kwargs:
+        kwargs["gender_norm"] = _normalize_gender_value(kwargs.pop("gender"))
+    elif "gender_norm" in kwargs:
+        kwargs["gender_norm"] = _normalize_gender_value(kwargs.get("gender_norm"))
     allowed = {
         "uuid",
         "name",
@@ -1110,12 +1102,19 @@ def get_known_faces(enabled_only=False):
     q = "SELECT * FROM known_faces"
     if enabled_only:
         q += " WHERE enabled=1"
-    return [dict(r) for r in _conn.execute(q).fetchall()]
+    rows = [dict(r) for r in _conn.execute(q).fetchall()]
+    for row in rows:
+        row["gender"] = _normalize_gender_value(row.get("gender") or row.get("gender_norm"))
+    return rows
 
 
 def get_known_face(face_id):
     row = _conn.execute("SELECT * FROM known_faces WHERE id=?", (face_id,)).fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    data = dict(row)
+    data["gender"] = _normalize_gender_value(data.get("gender") or data.get("gender_norm"))
+    return data
 
 
 def add_access_log(face_id, camera_id, decision, reason=""):
@@ -1151,7 +1150,7 @@ def _normalize_detections_payload(payload):
     return data
 
 
-def add_detection_log(camera_id, zone_id, identity, face_confidence, detections, rules_triggered, alarm_level, snapshot_path=""):
+def add_detection_log(camera_id, identity=None, face_confidence=0.0, detections=None, rules_triggered=None, alarm_level=0, snapshot_path=""):
     det_norm = _normalize_detections_payload(detections) if isinstance(detections, dict) else _normalize_detections_payload(detections)
     det_json = json.dumps(det_norm)
     rules_json = json.dumps(rules_triggered) if isinstance(rules_triggered, list) else rules_triggered
@@ -1160,7 +1159,7 @@ def add_detection_log(camera_id, zone_id, identity, face_confidence, detections,
     has_identity = 1 if ident_text and ident_text != "unknown" else 0
     cur = _write_execute(
         "INSERT INTO detection_logs (camera_id, zone_id, identity, face_confidence, detections, gender_norm, rules_triggered, alarm_level, snapshot_path, has_identity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (camera_id, zone_id, identity, face_confidence, det_json, gender_norm, rules_json, alarm_level, snapshot_path, has_identity),
+        (camera_id, None, identity, face_confidence, det_json, gender_norm, rules_json, alarm_level, snapshot_path, has_identity),
     )
     return cur.lastrowid
 

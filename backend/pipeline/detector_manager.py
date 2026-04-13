@@ -17,10 +17,6 @@ logger = logging.getLogger(__name__)
 _MAX_INFER_DIM = 512
 
 
-_GHOST_TTL = 0.35
-_MAX_GHOST_V = 28.0
-
-
 def _scale_frame(frame, max_dim=_MAX_INFER_DIM):
     h, w = frame.shape[:2]
     largest = max(h, w)
@@ -265,7 +261,6 @@ class DetectorManager:
             self.trackers_lock = threading.Lock()
             self.smoothing_state = {"faces": [], "objects": []}
             self.smoothing_lock = threading.Lock()
-            self.ghost_store = {"faces": [], "objects": []}
 
     def _get_camera_state(self, camera_id):
         with self._camera_states_lock:
@@ -741,10 +736,6 @@ class DetectorManager:
         with state.trackers_lock:
             state.trackers = entries
 
-    def _get_ghost_settings(self, now):
-        _ = now
-        return _GHOST_TTL, _MAX_GHOST_V, False
-
     @staticmethod
     def _build_grid(entries):
         grid = {}
@@ -784,14 +775,10 @@ class DetectorManager:
         state = self._get_camera_state(camera_id)
         with state.smoothing_lock:
             prev = state.smoothing_state
-            ghost_store = state.ghost_store
             now = time.time()
-
-            ghost_ttl, max_ghost_v, ghost_feature_on = self._get_ghost_settings(now)
 
             new_face_state = []
             face_grid, face_bucket = self._build_grid(prev.get("faces", []))
-            matched_face_prev: set = set()
 
             for f in faces:
                 curr_box = f.get("bbox")
@@ -855,7 +842,6 @@ class DetectorManager:
                     prev_vy = _as_float(matched.get("vy", 0.0))
                     vx = (0.55 * prev_vx) + (0.45 * inst_vx)
                     vy = (0.55 * prev_vy) + (0.45 * inst_vy)
-                    matched_face_prev.add(id(matched))
 
                 f["track_vx"] = vx
                 f["track_vy"] = vy
@@ -876,11 +862,8 @@ class DetectorManager:
                     }
                 )
 
-            ghost_store["faces"] = []
-
             new_obj_state = []
             obj_grid, obj_bucket = self._build_grid(prev.get("objects", []))
-            matched_obj_prev: set = set()
 
             for o in objects:
                 curr_box = o.get("bbox")
@@ -927,7 +910,6 @@ class DetectorManager:
                     prev_vy = _as_float(matched.get("vy", 0.0))
                     vx = (0.50 * prev_vx) + (0.50 * inst_vx)
                     vy = (0.50 * prev_vy) + (0.50 * inst_vy)
-                    matched_obj_prev.add(id(matched))
 
                 o["track_vx"] = vx
                 o["track_vy"] = vy
@@ -946,16 +928,13 @@ class DetectorManager:
                     }
                 )
 
-            ghost_store["objects"] = []
-
             prev["faces"] = new_face_state
             prev["objects"] = new_obj_state
             state.smoothing_state = prev
-            state.ghost_store = ghost_store
 
         return [], []
 
-    def process_frame(self, frame, camera_id, run_plugins=True, run_faces=True, identify_faces=True):
+    def process_frame(self, frame, camera_id, run_plugins=True, run_faces=True, identify_faces=True, lightweight=False):
         self.ensure_initialized()
         state = self._get_camera_state(camera_id)
 
@@ -975,13 +954,13 @@ class DetectorManager:
         logger.debug("Frame %d: faces=%d objects=%d", frame_idx, len(faces), len(objects))
 
         objects = self._filter_allowed_objects(objects)
-        if faces and identify_faces:
+        if faces and identify_faces and not lightweight:
             self._identify_faces_for_frame(camera_id, faces, aggressive_mode, max_identify, small, frame_idx)
 
-        if faces or objects:
-            self._rebuild_trackers(camera_id, faces, objects, max_trackers)
-
-        self._apply_smoothing(camera_id, faces, objects)
+        if not lightweight:
+            if faces or objects:
+                self._rebuild_trackers(camera_id, faces, objects, max_trackers)
+            self._apply_smoothing(camera_id, faces, objects)
 
         return {
             "faces": faces,

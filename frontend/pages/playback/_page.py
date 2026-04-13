@@ -225,6 +225,10 @@ class PlaybackPage(QWidget):
         self._active_media_tab: str = "clips"
         self._snapshots_loaded: bool = False
         self._snapshots_dirty: bool = True
+        self._snapshot_pending_rows: list[tuple[str, int, str, str]] = []
+        self._snapshot_load_timer = QTimer(self)
+        self._snapshot_load_timer.setSingleShot(True)
+        self._snapshot_load_timer.timeout.connect(self._consume_snapshot_rows)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -651,7 +655,6 @@ QSlider::handle:horizontal {{
         if key == "snapshots" and (self._snapshots_dirty or not self._snapshots_loaded):
             if self._is_playback_running():
                 self._refresh_snapshots_gallery_quick()
-                self._snapshots_dirty = True
             else:
                 QTimer.singleShot(0, self._refresh_snapshots_gallery)
         if self._media_open_folder_btn:
@@ -754,40 +757,61 @@ QSlider::handle:horizontal {{
             logger.debug("Snapshot file already missing path=%s", path)
 
     def _refresh_snapshots_gallery(self) -> None:
+        self._start_snapshot_gallery_refresh(include_db=True, limit=150)
+
+    def _refresh_snapshots_gallery_quick(self) -> None:
+        self._start_snapshot_gallery_refresh(include_db=False, limit=80)
+
+    def _start_snapshot_gallery_refresh(self, include_db: bool, limit: int) -> None:
         if not self._snapshots_list:
             return
-        self._snapshots_loaded = True
-        self._snapshots_dirty = False
+        self._snapshot_load_timer.stop()
+        self._snapshot_pending_rows.clear()
         self._snapshots_list.clear()
         self._snapshot_cards.clear()
-        rows: dict[str, tuple[int, str, str]] = {}
-        try:
-            for row in db.get_detection_logs(limit=300):
-                p = str(row.get("snapshot_path") or "").strip()
-                if p and os.path.exists(p):
-                    ts = int(row.get("timestamp") or os.path.getmtime(p) or 0)
-                    camera_name = str(row.get("camera_name") or f"Camera {row.get('camera_id') or '-'}")
-                    rules_raw = row.get("rules_triggered")
-                    rule_text = "No rule context"
-                    if isinstance(rules_raw, str) and rules_raw.strip():
-                        rule_text = rules_raw
-                    rows[p] = (ts, camera_name, rule_text)
-        except (sqlite3.Error, OSError, ValueError, TypeError):
-            logger.warning("Failed to load snapshot records", exc_info=True)
+        self._snapshots_loaded = True
+        self._snapshots_dirty = False
 
-        if not rows and os.path.isdir("data/snapshots"):
-            for name in os.listdir("data/snapshots"):
-                p = os.path.join("data/snapshots", name)
-                if os.path.isfile(p) and name.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
-                    rows[p] = (int(os.path.getmtime(p) or 0), "Snapshot", "No rule context")
+        rows: dict[str, tuple[int, str, str]] = {}
+        if include_db:
+            try:
+                for row in db.get_detection_logs(limit=max(10, int(limit))):
+                    p = str(row.get("snapshot_path") or "").strip()
+                    if p and os.path.exists(p):
+                        ts = int(row.get("timestamp") or os.path.getmtime(p) or 0)
+                        camera_name = str(row.get("camera_name") or f"Camera {row.get('camera_id') or '-'}")
+                        rules_raw = row.get("rules_triggered")
+                        rule_text = "No rule context"
+                        if isinstance(rules_raw, str) and rules_raw.strip():
+                            rule_text = rules_raw
+                        rows[p] = (ts, camera_name, rule_text)
+            except (sqlite3.Error, OSError, ValueError, TypeError):
+                logger.warning("Failed to load snapshot records", exc_info=True)
+
+        if os.path.isdir("data/snapshots"):
+            try:
+                for name in os.listdir("data/snapshots"):
+                    p = os.path.join("data/snapshots", name)
+                    if os.path.isfile(p) and name.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+                        if p not in rows:
+                            rows[p] = (int(os.path.getmtime(p) or 0), "Snapshot", "No rule context")
+            except OSError:
+                logger.debug("Failed filesystem snapshot listing", exc_info=True)
 
         if not rows:
-            self._clip_status.setText("No snapshots available")
             return
 
-        selected_item = None
-        for path, meta in sorted(rows.items(), key=lambda kv: kv[1][0], reverse=True):
-            ts, camera_name, rule_text = meta
+        ordered = sorted(rows.items(), key=lambda kv: kv[1][0], reverse=True)[: max(10, int(limit))]
+        self._snapshot_pending_rows = [(p, ts, cam, rule) for p, (ts, cam, rule) in ordered]
+        self._snapshot_load_timer.start(0)
+
+    def _consume_snapshot_rows(self) -> None:
+        if not self._snapshots_list or not self._snapshot_pending_rows:
+            return
+        batch = 6 if self._is_playback_running() else 20
+        count = min(batch, len(self._snapshot_pending_rows))
+        for _ in range(count):
+            path, ts, camera_name, rule_text = self._snapshot_pending_rows.pop(0)
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, path)
             row_w = SnapshotRowWidget(path, ts, camera_name=camera_name, rule_text=rule_text)
@@ -797,49 +821,13 @@ QSlider::handle:horizontal {{
             self._snapshots_list.addItem(item)
             self._snapshots_list.setItemWidget(item, row_w)
             self._snapshot_cards.append((item, row_w))
-            if selected_item is None:
-                selected_item = item
-        if selected_item:
-            self._snapshots_list.setCurrentItem(selected_item)
-        self._sync_snapshot_card_selection(self._snapshots_list.currentItem(), None)
 
-    def _refresh_snapshots_gallery_quick(self) -> None:
-        if not self._snapshots_list:
-            return
-        if self._snapshot_cards:
-            return
-        self._snapshots_list.clear()
-        self._snapshot_cards.clear()
-        if not os.path.isdir("data/snapshots"):
-            return
+        if self._snapshots_list.currentItem() is None and self._snapshots_list.count() > 0:
+            self._snapshots_list.setCurrentRow(0)
+            self._sync_snapshot_card_selection(self._snapshots_list.currentItem(), None)
 
-        rows: list[tuple[str, int]] = []
-        try:
-            for name in os.listdir("data/snapshots"):
-                p = os.path.join("data/snapshots", name)
-                if os.path.isfile(p) and name.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
-                    rows.append((p, int(os.path.getmtime(p) or 0)))
-        except OSError:
-            logger.debug("Failed quick snapshot listing", exc_info=True)
-            return
-
-        selected_item = None
-        for path, ts in sorted(rows, key=lambda kv: kv[1], reverse=True)[:120]:
-            item = QListWidgetItem()
-            item.setData(Qt.ItemDataRole.UserRole, path)
-            row_w = SnapshotRowWidget(path, ts, camera_name="Snapshot", rule_text="No rule context")
-            item.setSizeHint(QSize(0, row_w.height()))
-            row_w.selected.connect(lambda lw=self._snapshots_list, it=item: lw.setCurrentItem(it))
-            row_w.delete_requested.connect(lambda p=path: self._delete_snapshot(p))
-            self._snapshots_list.addItem(item)
-            self._snapshots_list.setItemWidget(item, row_w)
-            self._snapshot_cards.append((item, row_w))
-            if selected_item is None:
-                selected_item = item
-
-        if selected_item:
-            self._snapshots_list.setCurrentItem(selected_item)
-        self._sync_snapshot_card_selection(self._snapshots_list.currentItem(), None)
+        if self._snapshot_pending_rows:
+            self._snapshot_load_timer.start(0)
 
     def _on_clip_saved(self, path: str) -> None:
         self._refresh_clips_list()
@@ -1409,9 +1397,16 @@ QSlider::handle:horizontal {{
             self._clip_status.setText("No clips saved yet")
             return
         selected_item = None
+        seen_paths: set[str] = set()
+        seen_names: set[str] = set()
         for row in rows:
             path = row.get("path")
             if not path or not os.path.exists(path):
+                continue
+            norm_path = os.path.normcase(os.path.abspath(path))
+            name = os.path.splitext(os.path.basename(path))[0]
+            norm_name = name.strip().lower()
+            if norm_path in seen_paths or norm_name in seen_names:
                 continue
             ts = row.get("ts")
             if not ts:
@@ -1420,7 +1415,6 @@ QSlider::handle:horizontal {{
                 except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
                     ts = 0
             source = row.get("source") or "playback"
-            name = os.path.splitext(os.path.basename(path))[0]
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, path)
             item.setSizeHint(QSize(0, SIZE_ROW_XL))
@@ -1430,6 +1424,8 @@ QSlider::handle:horizontal {{
             self._clips_list.addItem(item)
             self._clips_list.setItemWidget(item, row_w)
             self._clip_cards.append((item, row_w))
+            seen_paths.add(norm_path)
+            seen_names.add(norm_name)
             if selected_path and path == selected_path:
                 selected_item = item
         if selected_item:

@@ -211,21 +211,9 @@ class RuleDetailPanel(QWidget):
             except (sqlite3.Error, RuntimeError, AttributeError, TypeError):
                 return f"Camera #{cid}"
 
-        def _zone_name(zid):
-            if not zid:
-                return "Whole Frame"
-            try:
-                for z in db.get_zones():
-                    if z["id"] == zid:
-                        return z["name"]
-            except (sqlite3.Error, RuntimeError, AttributeError, TypeError):
-                pass
-            return f"Zone #{zid}"
-
         bl.addWidget(_section("General"))
         for lbl, val in [
             ("Camera", _cam_name(rule.get("camera_id"))),
-            ("Zone", _zone_name(rule.get("zone_id"))),
             ("Logic", logic),
             ("Action", action),
             ("Priority", str(priority)),

@@ -61,15 +61,13 @@ def invalidate_cache():
         _CLASS_COLOR_CACHE["data"] = {}
 
 
-def merge_results(detection_results, camera_id, zone_info=None):
+def merge_results(detection_results, camera_id):
     state = {
         "identity": None,
         "gender": "unknown",
         "face_confidence": 0.0,
         "gender_confidence": 0.0,
         "liveness": 1.0,
-        "zone": None,
-        "zone_id": None,
         "camera_id": camera_id,
         "face_bbox": None,
         "all_faces": [],
@@ -101,10 +99,6 @@ def merge_results(detection_results, camera_id, zone_info=None):
         state["gender"] = normalize_gender(best_face.get("gender"))
         state["gender_confidence"] = float(best_face.get("gender_confidence", 0.0) or 0.0)
         state["face_bbox"] = best_face["bbox"]
-
-    if zone_info:
-        state["zone"] = zone_info.get("name")
-        state["zone_id"] = zone_info.get("id")
 
     objects = detection_results.get("objects", [])
     class_detections = {}

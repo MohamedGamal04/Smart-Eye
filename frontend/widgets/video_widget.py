@@ -50,7 +50,6 @@ class VideoWidget(QLabel):
         self.setStyleSheet("background-color: {}; border-radius: {}px;".format(_BLACK, RADIUS_LG))
         self._state = {}
         self._show_overlays = True
-        self._zones = []
         self._last_frame = None
         self._frame_w = 1
         self._frame_h = 1
@@ -188,9 +187,6 @@ class VideoWidget(QLabel):
 
     def set_fps(self, fps: float):
         self._fps = fps
-
-    def set_zones(self, zones):
-        self._zones = zones
 
     def set_show_overlays(self, show):
         self._show_overlays = show

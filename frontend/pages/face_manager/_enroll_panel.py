@@ -3,8 +3,8 @@
 import contextlib
 import re
 
-from PySide6.QtCore import Qt, QRegularExpression, QSettings
-from PySide6.QtGui import QFont, QRegularExpressionValidator
+from PySide6.QtCore import Qt, QRegularExpression, QSettings, QTimer
+from PySide6.QtGui import QFont, QIcon, QRegularExpressionValidator, QPixmap, QTransform
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -81,12 +81,16 @@ class _EnrollPanelMixin:
             edit.clear()
         self._ef_auth.setChecked(True)
         self._enroll_capture.reset()
+        self._stop_enroll_status_spinner()
+        self._stop_enroll_button_spinner()
         self._enroll_status_lbl.setText("")
         self._pre_enroll_sizes = self._splitter.sizes()
         self._right_stack.setCurrentIndex(1)
         self._enroll_capture.start_camera(0)
 
     def _close_enroll_panel(self):
+        self._stop_enroll_status_spinner()
+        self._stop_enroll_button_spinner()
         if self._enroll_panel is not None:
             with contextlib.suppress(Exception):
                 self._enroll_capture.stop_camera()
@@ -292,12 +296,21 @@ class _EnrollPanelMixin:
         footer_vbox.setContentsMargins(0, SPACE_6, 0, 0)
         footer_vbox.setSpacing(SPACE_XS)
 
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
+        status_row.setSpacing(SPACE_6)
+        self._enroll_loading_icon_lbl = QLabel()
+        self._enroll_loading_icon_lbl.setFixedSize(14, 14)
+        self._enroll_loading_icon_lbl.setVisible(False)
+        status_row.addWidget(self._enroll_loading_icon_lbl)
+
         self._enroll_status_lbl = QLabel("")
         self._enroll_status_lbl.setWordWrap(False)
         self._enroll_status_lbl.setStyleSheet(
             f"color: {_TEXT_SEC}; font-size: {FONT_SIZE_CAPTION}px; padding: 0 {SPACE_XS}px; background: transparent;"
         )
-        footer_vbox.addWidget(self._enroll_status_lbl)
+        status_row.addWidget(self._enroll_status_lbl, 1)
+        footer_vbox.addLayout(status_row)
         footer_vbox.addStretch()
 
         btn_row = QHBoxLayout()
@@ -340,6 +353,86 @@ class _EnrollPanelMixin:
         self._enroll_save_btn.clicked.connect(lambda: self._do_save_enroll(panel))
         return panel
 
+    def _start_enroll_status_spinner(self) -> None:
+        base_icon = QPixmap("frontend/assets/icons/loading.png")
+        if base_icon.isNull() or not hasattr(self, "_enroll_loading_icon_lbl"):
+            return
+
+        self._stop_enroll_status_spinner()
+        angle = 0
+
+        def _render_frame() -> None:
+            rotated = base_icon.transformed(QTransform().rotate(angle), Qt.TransformationMode.SmoothTransformation)
+            self._enroll_loading_icon_lbl.setPixmap(
+                rotated.scaled(
+                    14,
+                    14,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+
+        def _tick() -> None:
+            nonlocal angle
+            angle = (angle + 18) % 360
+            _render_frame()
+
+        _render_frame()
+        self._enroll_loading_icon_lbl.setVisible(True)
+        self._enroll_status_spin_timer = QTimer(self)
+        self._enroll_status_spin_timer.setInterval(40)
+        self._enroll_status_spin_timer.timeout.connect(_tick)
+        self._enroll_status_spin_timer.start()
+
+    def _stop_enroll_status_spinner(self) -> None:
+        timer = getattr(self, "_enroll_status_spin_timer", None)
+        if timer is not None:
+            timer.stop()
+            self._enroll_status_spin_timer = None
+        if hasattr(self, "_enroll_loading_icon_lbl"):
+            self._enroll_loading_icon_lbl.clear()
+            self._enroll_loading_icon_lbl.setVisible(False)
+
+    def _start_enroll_button_spinner(self) -> None:
+        base_icon = QPixmap("frontend/assets/icons/loading.png")
+        if base_icon.isNull():
+            return
+
+        self._stop_enroll_button_spinner()
+        angle = 0
+
+        def _render_frame() -> None:
+            rotated = base_icon.transformed(QTransform().rotate(angle), Qt.TransformationMode.SmoothTransformation)
+            self._enroll_save_btn.setIcon(
+                QIcon(
+                    rotated.scaled(
+                        14,
+                        14,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+            )
+
+        def _tick() -> None:
+            nonlocal angle
+            angle = (angle + 18) % 360
+            _render_frame()
+
+        _render_frame()
+        self._enroll_btn_spin_timer = QTimer(self)
+        self._enroll_btn_spin_timer.setInterval(40)
+        self._enroll_btn_spin_timer.timeout.connect(_tick)
+        self._enroll_btn_spin_timer.start()
+
+    def _stop_enroll_button_spinner(self) -> None:
+        timer = getattr(self, "_enroll_btn_spin_timer", None)
+        if timer is not None:
+            timer.stop()
+            self._enroll_btn_spin_timer = None
+        if hasattr(self, "_enroll_save_btn"):
+            self._enroll_save_btn.setIcon(QIcon())
+
     def _do_save_enroll(self, panel: QWidget):
         first_name = self._ef_first.text().strip()
         second_name = self._ef_second.text().strip()
@@ -374,6 +467,8 @@ class _EnrollPanelMixin:
 
         self._enroll_save_btn.setEnabled(False)
         self._enroll_save_btn.setText("Processing...")
+        self._start_enroll_button_spinner()
+        self._start_enroll_status_spinner()
         self._enroll_status_lbl.setText("Extracting face embeddings, please wait...")
         self._enroll_status_lbl.setStyleSheet(f"color: {_WARNING_ORANGE}; font-size: {FONT_SIZE_LABEL}px; padding: {SPACE_XS}px;")
 
@@ -396,6 +491,8 @@ class _EnrollPanelMixin:
         def _on_done(ok, msg):
             self._enroll_save_btn.setEnabled(True)
             self._enroll_save_btn.setText("Save")
+            self._stop_enroll_button_spinner()
+            self._stop_enroll_status_spinner()
             self._worker = None
             if ok:
                 self._enroll_status_lbl.setText(msg)
