@@ -1,6 +1,9 @@
 ﻿name: Build SmartEye
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       include_models:
@@ -16,6 +19,8 @@ jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 90
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
@@ -130,12 +135,21 @@ jobs:
         id: package
         shell: pwsh
         run: |
-          $archive = Join-Path $PWD "build\SmartEye-main-dist.zip"
+          $appInfo = Get-Content app_info.json | ConvertFrom-Json
+          $version = "$($appInfo.version)"
+          if (-not $version) {
+            throw "app_info.json version is missing"
+          }
+
+          $archiveName = "SmartEye-v$version-main-dist.zip"
+          $archive = Join-Path $PWD "build\$archiveName"
           if (Test-Path $archive) {
             Remove-Item -Force $archive
           }
 
           Compress-Archive -Path "${{ steps.verify.outputs.dist_dir }}\*" -DestinationPath $archive -CompressionLevel Optimal
+          "app_version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "archive_name=$archiveName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "artifact_path=$archive" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Upload artifact
@@ -144,3 +158,22 @@ jobs:
           name: SmartEye-main-dist
           path: ${{ steps.package.outputs.artifact_path }}
           retention-days: 14
+
+      - name: Create or update GitHub Release (main push)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = "${{ steps.package.outputs.app_version }}"
+          $tag = "v$version"
+          $title = "SmartEye $tag"
+          $asset = "${{ steps.package.outputs.artifact_path }}"
+
+          gh release view $tag --repo "${{ github.repository }}" *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag $asset --repo "${{ github.repository }}" --title $title --generate-notes
+          }
+          else {
+            gh release upload $tag $asset --repo "${{ github.repository }}" --clobber
+          }
