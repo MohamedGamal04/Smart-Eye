@@ -80,11 +80,17 @@ class AddCameraPanel(QWidget):
         nf = QFont()
         safe_set_point_size(nf, FONT_SIZE_SUBHEAD)
         nf.setBold(True)
-        t = QLabel("Save")
+        t = QLabel("Add Camera")
         t.setFont(nf)
         t.setStyleSheet(f"color:{_TEXT_PRI};")
         bh.addWidget(t)
         bh.addStretch()
+
+        close_x = QPushButton("✕")
+        close_x.setFixedSize(SIZE_CONTROL_MD, SIZE_CONTROL_MD)
+        close_x.setStyleSheet(_TEXT_BTN_GHOST)
+        close_x.clicked.connect(lambda: self.close_requested.emit())
+        bh.addWidget(close_x)
         lay.addWidget(banner)
 
         sep = QFrame()

@@ -22,7 +22,7 @@ AVAILABLE_MODELS = {
     "antelopev2": "antelopev2 - Highest accuracy (large)",
 }
 
-ALLOWED_MODULES = ["detection", "recognition", "genderage"]
+ALLOWED_MODULES = ["detection", "recognition"]
 
 
 def normalize_gender(value) -> str:
@@ -80,23 +80,28 @@ def _extract_gender_info(face_obj) -> tuple[str, float]:
 def get_allowed_modules() -> list[str]:
     import json as _json
 
+    gender_enabled = db.get_bool("gender_inference_enabled", False)
+
     try:
         raw = db.get_setting("insightface_allowed_modules", None)
         if raw:
             mods = _json.loads(raw) if isinstance(raw, str) else raw
             if isinstance(mods, list) and mods:
-
-                migrated = db.get_bool("insightface_allowed_modules_genderage_migrated", False)
-                if not migrated and "genderage" not in mods:
-                    mods = list(mods) + ["genderage"]
-                    with contextlib.suppress(Exception):
-                        db.set_setting("insightface_allowed_modules", _json.dumps(mods))
-                    with contextlib.suppress(Exception):
-                        db.set_setting("insightface_allowed_modules_genderage_migrated", "1")
-                return mods
+                filtered = [m for m in mods if m in ("detection", "recognition", "genderage")]
+                if "detection" not in filtered:
+                    filtered.insert(0, "detection")
+                if "recognition" not in filtered:
+                    filtered.append("recognition")
+                if not gender_enabled:
+                    filtered = [m for m in filtered if m != "genderage"]
+                return filtered
     except Exception:
         pass
-    return list(ALLOWED_MODULES)
+
+    base = list(ALLOWED_MODULES)
+    if gender_enabled:
+        base.append("genderage")
+    return base
 
 
 def set_allowed_modules(modules: list[str]) -> None:
@@ -522,7 +527,7 @@ class FaceModel:
             _logger.warning("detect_faces: inference error", exc_info=True)
             return []
         results = []
-        gender_enabled = db.get_bool("gender_inference_enabled", True)
+        gender_enabled = db.get_bool("gender_inference_enabled", False)
         for f in faces:
             try:
                 bbox = [int(b) for b in f.bbox]

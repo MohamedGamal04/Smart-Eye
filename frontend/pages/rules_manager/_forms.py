@@ -191,13 +191,6 @@ class _BaseRuleForm(QWidget):
         self._e_camera.setStyleSheet(_combo_ss())
         body_l.addWidget(_srow("Camera", self._e_camera))
 
-        self._e_zone = QComboBox()
-        self._e_zone.addItem("Whole Frame", None)
-        for z in db.get_zones():
-            self._e_zone.addItem(z["name"], z["id"])
-        self._e_zone.setStyleSheet(_combo_ss())
-        body_l.addWidget(_srow("Zone", self._e_zone))
-
         self._e_priority = QSpinBox()
         self._e_priority.setRange(0, 100)
         self._e_priority.setStyleSheet(_spin_ss())
@@ -400,11 +393,6 @@ class _EditRuleForm(_BaseRuleForm):
                 if self._e_camera.itemData(i) == rule["camera_id"]:
                     self._e_camera.setCurrentIndex(i)
                     break
-        if rule.get("zone_id"):
-            for i in range(self._e_zone.count()):
-                if self._e_zone.itemData(i) == rule["zone_id"]:
-                    self._e_zone.setCurrentIndex(i)
-                    break
 
         for c in self._rules_service.get_rule_conditions(self._rule_id):
             self._add_condition_row(c["attribute"], c["operator"], c["value"])
@@ -428,7 +416,6 @@ class _EditRuleForm(_BaseRuleForm):
                 action=self._e_action.currentText(),
                 priority=self._e_priority.value(),
                 camera_id=self._e_camera.currentData(),
-                zone_id=self._e_zone.currentData(),
                 enabled=self._e_enabled.isChecked(),
             ),
             conditions=self._collect_conditions(),
@@ -502,7 +489,6 @@ class NewRulePanel(_BaseRuleForm):
         self._e_action.setCurrentText("log_only")
         self._e_priority.setValue(0)
         self._e_camera.setCurrentIndex(0)
-        self._e_zone.setCurrentIndex(0)
         self._e_enabled.setChecked(True)
         if self._cond_vbox:
             while self._cond_vbox.count():
@@ -537,7 +523,6 @@ class NewRulePanel(_BaseRuleForm):
                 action=self._e_action.currentText(),
                 priority=self._e_priority.value(),
                 camera_id=self._e_camera.currentData(),
-                zone_id=self._e_zone.currentData(),
                 enabled=self._e_enabled.isChecked(),
             ),
             conditions=self._collect_conditions(),

@@ -32,7 +32,6 @@ class RulesService:
                 data.get("action", "log_only"),
                 int(data.get("priority", 0)),
                 data.get("camera_id"),
-                data.get("zone_id"),
             )
             db.update_rule(rid, enabled=1 if data.get("enabled", True) else 0)
         else:
@@ -45,7 +44,6 @@ class RulesService:
                 action=data.get("action", "log_only"),
                 priority=int(data.get("priority", 0)),
                 camera_id=data.get("camera_id"),
-                zone_id=data.get("zone_id"),
                 enabled=1 if data.get("enabled", True) else 0,
             )
             db.delete_rule_conditions(rid)

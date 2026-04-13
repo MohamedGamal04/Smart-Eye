@@ -3,7 +3,7 @@
 import contextlib
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QIcon, QPixmap, QTransform
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -45,6 +45,43 @@ from ._constants import (
 
 
 class _ModelPanelMixin:
+    def _apply_loading_icon(self, dlg: QProgressDialog) -> None:
+        base_icon = QPixmap("frontend/assets/icons/loading.png")
+        if base_icon.isNull():
+            return
+
+        icon_lbl = QLabel()
+        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        angle = 0
+
+        def _render_frame() -> None:
+            rotated = base_icon.transformed(QTransform().rotate(angle), Qt.TransformationMode.SmoothTransformation)
+            icon_lbl.setPixmap(
+                rotated.scaled(
+                    36,
+                    36,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+
+        def _tick() -> None:
+            nonlocal angle
+            angle = (angle + 18) % 360
+            _render_frame()
+
+        _render_frame()
+
+        timer = QTimer(dlg)
+        timer.setInterval(40)
+        timer.timeout.connect(_tick)
+        timer.start()
+
+        layout = dlg.layout()
+        if layout is not None:
+            layout.insertWidget(0, icon_lbl, 0, Qt.AlignmentFlag.AlignHCenter)
+
     def _build_model_config_panel(self) -> QFrame:
         from backend.models.face_model import AVAILABLE_MODELS
 
@@ -71,6 +108,10 @@ class _ModelPanelMixin:
         sec_lbl.setStyleSheet(f"color: {_TEXT_SEC}; background: transparent;")
         hdr.addWidget(sec_lbl)
         hdr.addStretch()
+        self._fm_loading_icon_lbl = QLabel()
+        self._fm_loading_icon_lbl.setFixedSize(16, 16)
+        self._fm_loading_icon_lbl.setVisible(False)
+        hdr.addWidget(self._fm_loading_icon_lbl)
         self._fm_model_status = QLabel("Status: checking\u2026")
         self._fm_model_status.setStyleSheet(f"color: {_TEXT_SEC}; font-size: {FONT_SIZE_LABEL}px; font-weight: {FONT_WEIGHT_SEMIBOLD};")
         hdr.addWidget(self._fm_model_status)
@@ -197,6 +238,85 @@ class _ModelPanelMixin:
         if folder:
             self._fm_model_path.setText(folder)
 
+    def _start_fm_header_spinner(self) -> None:
+        base_icon = QPixmap("frontend/assets/icons/loading.png")
+        if base_icon.isNull() or not hasattr(self, "_fm_loading_icon_lbl"):
+            return
+
+        self._stop_fm_header_spinner()
+        angle = 0
+
+        def _render_frame() -> None:
+            rotated = base_icon.transformed(QTransform().rotate(angle), Qt.TransformationMode.SmoothTransformation)
+            self._fm_loading_icon_lbl.setPixmap(
+                rotated.scaled(
+                    16,
+                    16,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+
+        def _tick() -> None:
+            nonlocal angle
+            angle = (angle + 18) % 360
+            _render_frame()
+
+        _render_frame()
+        self._fm_loading_icon_lbl.setVisible(True)
+        self._fm_header_spin_timer = QTimer(self)
+        self._fm_header_spin_timer.setInterval(40)
+        self._fm_header_spin_timer.timeout.connect(_tick)
+        self._fm_header_spin_timer.start()
+
+    def _stop_fm_header_spinner(self) -> None:
+        timer = getattr(self, "_fm_header_spin_timer", None)
+        if timer is not None:
+            timer.stop()
+            self._fm_header_spin_timer = None
+        if hasattr(self, "_fm_loading_icon_lbl"):
+            self._fm_loading_icon_lbl.clear()
+            self._fm_loading_icon_lbl.setVisible(False)
+
+    def _start_fm_button_spinner(self) -> None:
+        base_icon = QPixmap("frontend/assets/icons/loading.png")
+        if base_icon.isNull():
+            return
+
+        self._stop_fm_button_spinner()
+        angle = 0
+
+        def _render_frame() -> None:
+            rotated = base_icon.transformed(QTransform().rotate(angle), Qt.TransformationMode.SmoothTransformation)
+            self._fm_save_reload_btn.setIcon(
+                QIcon(
+                    rotated.scaled(
+                        14,
+                        14,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+            )
+
+        def _tick() -> None:
+            nonlocal angle
+            angle = (angle + 18) % 360
+            _render_frame()
+
+        _render_frame()
+        self._fm_btn_spin_timer = QTimer(self)
+        self._fm_btn_spin_timer.setInterval(40)
+        self._fm_btn_spin_timer.timeout.connect(_tick)
+        self._fm_btn_spin_timer.start()
+
+    def _stop_fm_button_spinner(self) -> None:
+        timer = getattr(self, "_fm_btn_spin_timer", None)
+        if timer is not None:
+            timer.stop()
+            self._fm_btn_spin_timer = None
+        self._fm_save_reload_btn.setIcon(QIcon())
+
     def _fm_reload_model(self, force: bool = False):
         if getattr(self, "_fm_reload_busy", False):
             return
@@ -208,12 +328,14 @@ class _ModelPanelMixin:
             old.wait(800)
 
         path = self._fm_model_path.text().strip() or ""
-        self._fm_model_status.setText("\u23f3 Loading \u2014 please wait\u2026")
+        self._start_fm_header_spinner()
+        self._fm_model_status.setText("Loading — please wait…")
         self._fm_model_status.setStyleSheet(
             f"color: {_WARNING_ORANGE}; font-size: {FONT_SIZE_LABEL}px; font-weight: {FONT_WEIGHT_SEMIBOLD};"
         )
         self._fm_save_reload_btn.setEnabled(False)
-        self._fm_save_reload_btn.setText("Saving\u2026")
+        self._fm_save_reload_btn.setText("Saving…")
+        self._start_fm_button_spinner()
 
         from PySide6.QtCore import QThread, Signal as _Signal
 
@@ -248,6 +370,7 @@ class _ModelPanelMixin:
                 self._fm_progress.close()
         self._fm_progress = QProgressDialog("Loading InsightFace model\u2026", None, 0, 0, self)
         self._fm_progress.setWindowTitle("Loading")
+        self._apply_loading_icon(self._fm_progress)
         self._fm_progress.setWindowModality(Qt.WindowModality.ApplicationModal)
         self._fm_progress.setCancelButton(None)
         self._fm_progress.setMinimumDuration(0)
@@ -260,6 +383,8 @@ class _ModelPanelMixin:
                 self._fm_progress = None
             self._fm_save_reload_btn.setEnabled(True)
             self._fm_save_reload_btn.setText("Save")
+            self._stop_fm_button_spinner()
+            self._stop_fm_header_spinner()
             if ok:
                 from backend.models.model_loader import get_face_model
 

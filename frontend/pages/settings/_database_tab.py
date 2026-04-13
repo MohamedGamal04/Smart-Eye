@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 
 from backend.repository import db
 from frontend.dialogs import apply_popup_theme
+from frontend.widgets.password_visibility import attach_password_visibility_toggle
 from frontend.styles._colors import (
     _ACCENT,
     _ACCENT_HI,
@@ -874,6 +875,7 @@ class DatabaseTab(QWidget):
         password_edit = QLineEdit()
         password_edit.setEchoMode(QLineEdit.EchoMode.Password)
         password_edit.setPlaceholderText("Administrator password")
+        attach_password_visibility_toggle(password_edit)
 
         form.addRow("Admin Email", email_edit)
         form.addRow("Password", password_edit)

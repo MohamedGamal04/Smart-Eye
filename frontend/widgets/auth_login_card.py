@@ -26,6 +26,7 @@ from frontend.styles._colors import (
 from frontend.styles._btn_styles import _PRIMARY_BTN, _TEXT_BTN_GHOST
 from frontend.styles._input_styles import _AUTH_INPUT_LG
 from frontend.styles.page_styles import muted_label_style, text_style
+from frontend.widgets.password_visibility import attach_password_visibility_toggle
 from frontend.app_theme import safe_set_point_size
 from frontend.ui_tokens import (
     FONT_SIZE_BODY,
@@ -110,6 +111,7 @@ class AuthLoginCard(QFrame):
         self._password.setEchoMode(QLineEdit.EchoMode.Password)
         self._password.setFixedHeight(SIZE_CONTROL_LG)
         self._password.setStyleSheet(_AUTH_INPUT_LG)
+        attach_password_visibility_toggle(self._password)
         form.addWidget(self._password)
 
         form.addSpacing(SPACE_SM)

@@ -30,6 +30,7 @@ from frontend.styles.page_styles import divider_style, muted_label_style, sectio
 from frontend.widgets.toast import show_toast
 from frontend.widgets.confirm_delete_button import ConfirmDeleteButton
 from frontend.widgets.toggle_switch import ToggleSwitch
+from frontend.widgets.password_visibility import attach_password_visibility_toggle
 from frontend.widgets.action_feedback import (
     build_status_label,
     flash_status,
@@ -62,7 +63,6 @@ from frontend.ui_tokens import (
     FONT_WEIGHT_NORMAL,
     RADIUS_6,
     RADIUS_LG,
-    SIZE_BTN_W_54,
     SIZE_BTN_W_72,
     SIZE_BTN_W_88,
     SIZE_BTN_W_MD,
@@ -178,25 +178,8 @@ class SmtpPanel(QWidget):
         self._smtp_pass = QLineEdit()
         self._smtp_pass.setEchoMode(QLineEdit.EchoMode.Password)
         self._smtp_pass.setPlaceholderText("App password or SMTP password")
-        show_btn = QPushButton("Show")
-        show_btn.setFixedHeight(SIZE_CONTROL_SM)
-        show_btn.setFixedWidth(SIZE_BTN_W_54)
-        show_btn.setCheckable(True)
-        show_btn.setStyleSheet(
-            f"QPushButton{{border:{SPACE_XXXS}px solid {_BORDER};border-radius:{RADIUS_6}px;"
-            f"background:transparent;color:{_TEXT_SEC};font-size:{FONT_SIZE_CAPTION}px;min-height:{SIZE_ITEM_SM}px;}}"
-            f"QPushButton:hover{{color:{_TEXT_PRI};}}"
-            f"QPushButton:checked{{background:{_ACCENT_BG_12};"
-            f"color:{_ACCENT_HI};border-color:{_ACCENT};}}"
-        )
-        show_btn.toggled.connect(
-            lambda c: (
-                self._smtp_pass.setEchoMode(QLineEdit.EchoMode.Normal if c else QLineEdit.EchoMode.Password),
-                show_btn.setText("Hide" if c else "Show"),
-            )
-        )
+        attach_password_visibility_toggle(self._smtp_pass)
         ph.addWidget(self._smtp_pass, stretch=1)
-        ph.addWidget(show_btn)
         body_l.addWidget(_srow("Password", pw_wrap))
 
         hint_fr = QFrame()
@@ -524,6 +507,7 @@ class ProfilePanel(QWidget):
             self._e_auth = QLineEdit(p.get("auth_token", ""))
             self._e_auth.setPlaceholderText("Bearer token (optional)")
             self._e_auth.setEchoMode(QLineEdit.EchoMode.Password)
+            attach_password_visibility_toggle(self._e_auth)
             self._auth_row = _srow("Auth Token", self._e_auth)
             body_l.addWidget(self._auth_row)
 

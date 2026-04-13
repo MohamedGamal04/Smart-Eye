@@ -22,6 +22,7 @@ from frontend.navigation import nav_keys, nav_label_map
 from frontend.widgets.confirm_delete_button import ConfirmDeleteButton
 from frontend.widgets.toggle_switch import ToggleSwitch
 from frontend.widgets.checkbox_style import CHECKBOX_STYLE
+from frontend.widgets.password_visibility import attach_password_visibility_toggle
 from frontend.styles._colors import _BG_CHECK, _BG_NAV_ALT, _BG_NAV_DARK, _TEXT_PRI, _TEXT_SEC
 from utils.auth_validation import get_email_validation_error
 from frontend.ui_tokens import (
@@ -99,11 +100,13 @@ class AccountsTab(QWidget):
         self._password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self._password_input.setPlaceholderText("Set a password")
         self._password_input.setFixedHeight(_FIELD_H)
+        attach_password_visibility_toggle(self._password_input)
 
         self._confirm_input = QLineEdit()
         self._confirm_input.setEchoMode(QLineEdit.EchoMode.Password)
         self._confirm_input.setPlaceholderText("Confirm password")
         self._confirm_input.setFixedHeight(_FIELD_H)
+        attach_password_visibility_toggle(self._confirm_input)
 
         self._admin_toggle = ToggleSwitch()
         self._avatar_path = QLineEdit()
@@ -129,6 +132,7 @@ class AccountsTab(QWidget):
         self._q1.setPlaceholderText("What is your pet's name?")
         self._a1 = QLineEdit()
         self._a1.setEchoMode(QLineEdit.EchoMode.Password)
+        attach_password_visibility_toggle(self._a1)
         bl.addWidget(_srow("Question 1", self._q1))
         bl.addWidget(_srow("Answer 1", self._a1))
 
@@ -136,6 +140,7 @@ class AccountsTab(QWidget):
         self._q2.setPlaceholderText("In what city were you born?")
         self._a2 = QLineEdit()
         self._a2.setEchoMode(QLineEdit.EchoMode.Password)
+        attach_password_visibility_toggle(self._a2)
         bl.addWidget(_srow("Question 2", self._q2))
         bl.addWidget(_srow("Answer 2", self._a2))
 
@@ -143,6 +148,7 @@ class AccountsTab(QWidget):
         self._q3.setPlaceholderText("What is your favorite color?")
         self._a3 = QLineEdit()
         self._a3.setEchoMode(QLineEdit.EchoMode.Password)
+        attach_password_visibility_toggle(self._a3)
         bl.addWidget(_srow("Question 3", self._q3))
         bl.addWidget(_srow("Answer 3", self._a3))
 

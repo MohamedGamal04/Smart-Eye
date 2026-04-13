@@ -299,6 +299,7 @@ class _IdentityPicker(QWidget):
         self._combo.blockSignals(True)
         self._combo.clear()
         self._combo.addItem("\u2500 select identity \u2500", ("", ""))
+        self._combo.addItem("Unknown", ("unknown", "unknown"))
         for f in self._faces:
             name = (f.get("name", "") or "").strip()
             uuid = (f.get("external_uuid", "") or "").strip()

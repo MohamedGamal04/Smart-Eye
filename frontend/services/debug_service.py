@@ -12,7 +12,7 @@ _DUMMY_CAMERA_LOCATIONS = [
     "Front Entrance",
     "Back Door",
     "Warehouse Aisle",
-    "Packing Zone",
+    "Packing Bay",
     "Loading Dock",
     "Safety Corridor",
 ]
@@ -70,7 +70,7 @@ _DEBUG_RULES = [
     },
     {
         "slug": "unknown-restricted",
-        "name": "Unknown Person In Restricted Zone",
+        "name": "Unknown Person Alert",
         "description": "Debug auto rule: trigger when identity is unknown and a person is present.",
         "logic": "AND",
         "action": "alarm",
@@ -187,12 +187,12 @@ class DebugService:
                 if existing:
                     rid = int(existing[0])
                     conn.execute(
-                        "UPDATE rules SET description=?, logic=?, action=?, enabled=1, priority=?, zone_id=NULL WHERE id=?",
+                        "UPDATE rules SET description=?, logic=?, action=?, enabled=1, priority=? WHERE id=?",
                         (rule_desc, spec["logic"], spec["action"], int(spec["priority"]), rid),
                     )
                 else:
                     cur = conn.execute(
-                        "INSERT INTO rules (name, description, logic, action, enabled, priority, camera_id, zone_id) VALUES (?, ?, ?, ?, 1, ?, ?, NULL)",
+                        "INSERT INTO rules (name, description, logic, action, enabled, priority, camera_id) VALUES (?, ?, ?, ?, 1, ?, ?)",
                         (rule_name, rule_desc, spec["logic"], spec["action"], int(spec["priority"]), cam_id),
                     )
                     rid = int(cur.lastrowid)

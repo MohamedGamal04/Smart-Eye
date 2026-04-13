@@ -405,7 +405,7 @@ class CameraThread(QThread):
                         _b = _oi.get("bbox")
                         if _b:
                             _oi["bbox"] = [int(_b[0] * _inv), int(_b[1] * _inv), int(_b[2] * _inv), int(_b[3] * _inv)]
-                primary, all_triggered = build_state(det, cid, fw, fh)
+                primary, all_triggered = build_state(det, cid)
                 primary["_triggered"] = all_triggered
                 primary["_fw"] = fw
                 primary["_fh"] = fh

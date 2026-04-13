@@ -420,7 +420,7 @@ class CameraDetailPanel(QWidget):
             bl.addWidget(_div())
 
         bl.addSpacing(SPACE_10)
-        bl.addWidget(_section("Detection"))
+        bl.addWidget(_section("Face Recognition"))
         face_thresh = cam.get("face_similarity_threshold")
         if face_thresh is None:
             try:
@@ -453,7 +453,7 @@ class CameraDetailPanel(QWidget):
             bl.addWidget(_div())
 
         bl.addSpacing(SPACE_10)
-        bl.addWidget(_section("Detection Plugins"))
+        bl.addWidget(_section("Plugins"))
         try:
             assigned = db.get_camera_plugins(cam["id"])
         except (sqlite3.Error, OSError, ValueError):
@@ -717,7 +717,7 @@ class CameraDetailPanel(QWidget):
         body_l.addWidget(_srow("Enabled", _left(enabled_toggle)))
 
         body_l.addSpacing(SPACE_XS)
-        body_l.addWidget(_make_sdiv("Detection"))
+        body_l.addWidget(_make_sdiv("Face Recognition"))
 
         try:
             raw_thresh = cam.get("face_similarity_threshold")
@@ -765,7 +765,7 @@ class CameraDetailPanel(QWidget):
         body_l.addWidget(_srow("Face Recognition", _left(face_toggle)))
 
         body_l.addSpacing(SPACE_XS)
-        body_l.addWidget(_make_sdiv("Detection Plugins"))
+        body_l.addWidget(_make_sdiv("Plugins"))
 
         try:
             all_plugins = db.get_plugins()
@@ -1139,7 +1139,7 @@ class CameraDetailPanel(QWidget):
         layout.setContentsMargins(SPACE_20, SPACE_LG, SPACE_20, SPACE_LG)
         layout.setSpacing(SPACE_MD)
 
-        title_lbl = QLabel(f"Detection Classes — {plugin_name}")
+        title_lbl = QLabel(f"Plugins Classes — {plugin_name}")
         tf = QFont()
         safe_set_point_size(tf, FONT_SIZE_SUBHEAD)
         tf.setBold(True)

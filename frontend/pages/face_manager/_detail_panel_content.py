@@ -3,6 +3,7 @@
 from PySide6.QtCore import Qt, QRegularExpression
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -35,6 +36,7 @@ from frontend.styles._colors import (
 )
 from frontend.styles._banner_styles import make_edit_banner
 from frontend.styles._btn_styles import _TEXT_BTN_GHOST
+from frontend.styles._input_styles import _FORM_COMBO
 from frontend.ui_tokens import (
     FONT_SIZE_BODY,
     FONT_SIZE_LABEL,
@@ -75,6 +77,15 @@ from ._constants import (
     _split_name_parts,
 )
 from ._widgets import ClickableFrame
+
+
+def _display_gender(value: str | None) -> str:
+    text = (value or "").strip().lower()
+    if text == "male":
+        return "Male"
+    if text == "female":
+        return "Female"
+    return "Unknown"
 
 
 def build_face_content(panel, face: dict, layout: QVBoxLayout) -> None:
@@ -242,6 +253,38 @@ def build_face_content(panel, face: dict, layout: QVBoxLayout) -> None:
     else:
         display_birth = stored_birth
     panel._field_row("Birth Date", "birth_date", display_birth, content)
+
+    gender_row = QHBoxLayout()
+    gender_row.setContentsMargins(0, 0, 0, 0)
+    gender_row.setSpacing(SPACE_10)
+
+    gender_lbl = QLabel("Gender:")
+    gender_lbl.setStyleSheet(f"color: {_TEXT_SEC}; min-width: {SIZE_FIELD_W_SM}px;")
+    gender_lbl.setFixedWidth(SIZE_LABEL_W_LG)
+    gender_row.addWidget(gender_lbl)
+
+    gender_current = face.get("gender") or face.get("gender_norm")
+    gender_value = QLabel(_display_gender(gender_current))
+    gender_value.setStyleSheet(f"color: {_TEXT_PRI};")
+    gender_row.addWidget(gender_value, stretch=1)
+
+    gender_edit = QComboBox()
+    gender_edit.addItems(["Unknown", "Male", "Female"])
+    gender_edit.setCurrentText(_display_gender(gender_current))
+    gender_edit.setStyleSheet(_FORM_COMBO)
+    gender_edit.setEnabled(False)
+    gender_edit.setVisible(False)
+    gender_row.addWidget(gender_edit, stretch=1)
+
+    panel._inputs["gender"] = gender_edit
+    panel._value_labels["gender"] = gender_value
+    content.addLayout(gender_row)
+
+    gender_div = QFrame()
+    gender_div.setFrameShape(QFrame.Shape.HLine)
+    gender_div.setStyleSheet(f"background: {_BORDER_DIM}; border: none; max-height: {SPACE_XXXS}px;")
+    content.addWidget(gender_div)
+
     content.addSpacing(SPACE_SM)
     content.addLayout(panel._build_section_header("Access", "access"))
 
@@ -343,7 +386,7 @@ def build_face_content(panel, face: dict, layout: QVBoxLayout) -> None:
         "identity": ["first_name", "second_name", "third_name", "last_name", "department"],
         "contact": ["phone", "email"],
         "location": ["address", "country"],
-        "personal": ["birth_date"],
+        "personal": ["birth_date", "gender"],
         "access": ["authorized"],
     }
 

@@ -109,6 +109,7 @@ class PlaybackThread(QThread):
                 run_plugins=self._plugins_enabled,
                 run_faces=self._face_detection_enabled,
                 identify_faces=False,
+                lightweight=True,
             )
             if not self._plugins_enabled:
                 detection_results["objects"] = []
@@ -123,8 +124,6 @@ class PlaybackThread(QThread):
             primary, triggered = build_state(
                 detection_results,
                 self._camera_id,
-                w,
-                h,
                 evaluate_rule_triggers=self._record_enabled,
             )
             return infer_idx, frame, w, h, primary, triggered
@@ -231,7 +230,16 @@ class PlaybackThread(QThread):
                 and pending_future is None
                 and self._running
                 and not self.isInterruptionRequested()
-                and (frame_idx % infer_stride == 0 or last_detect_frame_idx < 0)
+                and (
+                    frame_idx
+                    % (
+                        max(1, int(round(video_fps / max(1.0, min(self._infer_target_fps, 8.0)))))
+                        if self._face_detection_enabled and not self._plugins_enabled
+                        else infer_stride
+                    )
+                    == 0
+                    or last_detect_frame_idx < 0
+                )
             )
             if should_schedule:
                 try:
