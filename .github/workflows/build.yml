@@ -1,24 +1,11 @@
-﻿name: Build SmartEye
+name: Build SmartEye
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
-    inputs:
-      include_models:
-        description: "Bundle data/models into artifact (increases size)"
-        required: false
-        default: "false"
-      max_dist_mb:
-        description: "Maximum allowed dist size in MB"
-        required: false
-        default: "3072"
 
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 360
     permissions:
       contents: write
 
@@ -35,179 +22,314 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: Install dependencies
-        shell: pwsh
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install --upgrade ordered-set zstandard nuitka
 
-      - name: Cache Nuitka compilation cache
+      - name: Remove duplicate top-level insightface path
+        shell: pwsh
+        run: |
+          $pythonRoot = (python -c "import sys; print(sys.prefix)").Trim()
+          $topLevelInsightface = Join-Path $pythonRoot "insightface"
+
+          if (Test-Path $topLevelInsightface) {
+            Write-Host "Removing duplicate package path: $topLevelInsightface"
+            Remove-Item -Path $topLevelInsightface -Recurse -Force
+            Write-Host "Done."
+          } else {
+            Write-Host "No duplicate top-level insightface path detected"
+          }
+
+          python -c "import insightface, sys; print('Python prefix:', sys.prefix); print('insightface module:', insightface.__file__)"
+
+      - name: Ensure setuptools is installed for Nuitka
+        run: |
+          pip install --upgrade setuptools
+          pip show setuptools
+
+      - name: Collect PySide6 plugins
+        shell: pwsh
+        run: |
+          $p = (python -c "import PySide6, os; print(os.path.join(os.path.dirname(PySide6.__file__), 'plugins'))").Trim()
+          if (Test-Path $p) {
+            Write-Host "Copying PySide6 plugins from $p"
+            Remove-Item -Path "$PWD\frontend\pyside6_plugins" -Recurse -Force -ErrorAction SilentlyContinue
+            Copy-Item -Path $p -Destination "$PWD\frontend\pyside6_plugins" -Recurse -Force
+            Write-Host "PySide6 plugins copied to frontend/pyside6_plugins"
+          } else {
+            Write-Host "PySide6 plugins path not found: $p"
+          }
+
+      - name: Download model bundle (optional)
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "data/models")) {
+            if ($env:MODEL_BUNDLE_URL) {
+              Write-Host "MODEL_BUNDLE_URL set — downloading model bundle..."
+              Invoke-WebRequest -Uri $env:MODEL_BUNDLE_URL -OutFile models.zip -UseBasicParsing
+              Expand-Archive models.zip -DestinationPath data/models
+              Remove-Item models.zip -Force
+              Write-Host "Model bundle downloaded and extracted to data/models"
+            } else {
+              Write-Host "MODEL_BUNDLE_URL not set; skipping model download"
+            }
+          } else {
+            Write-Host "data/models already exists — skipping download"
+          }
+
+      - name: Cache Nuitka build cache
         uses: actions/cache@v4
         with:
-          path: ~/.nuitka
-          key: nuitka-${{ runner.os }}-${{ hashFiles('**/*.py') }}
+          path: C:/Users/runneradmin/AppData/Local/Nuitka/Nuitka
+          key: nuitka-${{ runner.os }}-${{ hashFiles('requirements.txt', 'main.py') }}
           restore-keys: |
             nuitka-${{ runner.os }}-
 
-      - name: Clean previous output
+      - name: Check for model bundle
+        id: check_models
         shell: pwsh
         run: |
-          if (Test-Path build) {
-            Remove-Item -Recurse -Force build
-          }
+          $hasModels = (Get-ChildItem -Path "data/models" -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0
+          "has_models=$($hasModels.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Remove duplicate insightface mesh cython
+      - name: Check for object model file
+        id: check_obj
         shell: pwsh
         run: |
-          $found = Get-ChildItem -Path "C:/hostedtoolcache/windows/Python/3.12.*/x64/insightface/thirdparty/face3d/mesh/cython" -Directory -ErrorAction SilentlyContinue
-          if ($found) {
-            foreach ($dir in $found) {
-              Write-Host "Removing duplicate: $($dir.FullName)"
-              Remove-Item -Recurse -Force $dir.FullName
-            }
+          $hasObj = Test-Path "data/models/Obj-Detection.onnx"
+          "has_obj=$($hasObj.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Build with Nuitka
+        uses: Nuitka/Nuitka-Action@main
+        with:
+          nuitka-version: 2.7.11
+          script-name: main.py
+          mode: standalone
+          output-dir: build
+          output-file: SmartEye
+          jobs: "4"
+          lto: "yes"
+          windows-console-mode: disable
+          windows-icon-from-ico: frontend/assets/icons/icon.ico
+          enable-plugins: pyside6
+          show-scons: true
+          include-package: |
+            psutil
+            PySide6
+            shiboken6
+            reportlab
+            requests
+            pyqtgraph
+            onnx
+            onnxruntime
+            insightface
+            GPUtil
+            wmi
+            backend
+            frontend
+            utils
+            streamlink
+          include-package-data: |
+            reportlab
+            pyqtgraph
+            insightface
+            onnxruntime
+            streamlink
+          include-data-dir: |
+            frontend/assets=frontend/assets
+            PySide6/plugins=frontend/pyside6_plugins
+          include-data-files: |
+            app_info.json=app_info.json
+            backend/database/schema.sql=backend/database/schema.sql
+            ${{ steps.check_obj.outputs.has_obj == 'true' && 'data/models/Obj-Detection.onnx=data/models/Obj-Detection.onnx' || '' }}
+          nofollow-import-to: |
+            numpy.distutils
+            numpy.random.tests
+            numpy.random.tests.test_extending
+            onnxruntime.training
+            onnxruntime.tools
+            onnx.backend.test
+            cv2.samples
+            pyqtgraph.tests
+            pyqtgraph.opengl
+            pyqtgraph.exporters
+            PySide6.QtWebEngine
+            PySide6.QtWebEngineWidgets
+            PySide6.QtWebEngineCore
+            PySide6.Qt3DCore
+            PySide6.Qt3DRender
+            PySide6.Qt3DInput
+            PySide6.Qt3DLogic
+            PySide6.Qt3DAnimation
+            PySide6.Qt3DExtras
+            PySide6.QtCharts
+            PySide6.QtDataVisualization
+            PySide6.QtLocation
+            PySide6.QtPositioning
+            PySide6.QtRemoteObjects
+            PySide6.QtSensors
+            PySide6.QtSerialPort
+            PySide6.QtTextToSpeech
+            PySide6.QtBluetooth
+            PySide6.QtNfc
+            unittest
+            test
+            distutils
+            setuptools
+            pkg_resources
+            pip
+            doctest
+          noinclude-data-files: |
+            qt6webenginecore.dll
+            qt6webenginequick.dll
+            qt6quick.dll
+            qt6quick3d.dll
+            qt6quick3druntimerender.dll
+            qt6quick3dutils.dll
+            qt6quickcontrols2.dll
+            qt6quickshapes.dll
+            qt6quicktemplates2.dll
+            qt6quicktest.dll
+            qt6quickwidgets.dll
+            qt6qml.dll
+            qt6qmlmeta.dll
+            qt6qmlmodels.dll
+            qt6qmlworkerscript.dll
+            qt6scxml.dll
+            qt6spatialaudio.dll
+            skimage/data/*
+            pyqtgraph/examples/*
+          assume-yes-for-downloads: true
+
+      - name: Compress executable with UPX
+        shell: pwsh
+        run: |
+          choco install upx -y
+          $exe = Get-ChildItem -Path "$PWD\build" -Filter *.exe -File -Recurse | Select-Object -First 1
+          if ($exe) {
+            Write-Host "Compressing $($exe.FullName) with UPX..."
+            upx -9 $exe.FullName
+            Write-Host "Compression complete!"
           } else {
-            Write-Host "No duplicate global cython found."
+            Write-Host "Warning: No .exe file found to compress"
           }
 
-      - name: Validate version from app_info.json
-        id: appinfo
+      - name: Create NSIS Installer
+        shell: pwsh
+        run: |
+          choco install nsis -y
+          
+          $appInfo = Get-Content app_info.json | ConvertFrom-Json
+          $appVersion = $appInfo.version
+          
+          $distDir = Get-ChildItem -Path (Join-Path $PWD 'build') -Directory -Filter *.dist | Select-Object -First 1
+          if (-not $distDir) {
+            throw "No .dist folder found"
+          }
+          
+          $nsiContent = @"
+          !define APPNAME "SmartEye"
+          !define VERSION "$appVersion"
+          !define EXEFILE "SmartEye.exe"
+          
+          SetCompressor /SOLID lzma
+          SetCompressorDictSize 64
+          
+          Name "`${APPNAME} Setup"
+          
+          !define MUI_ICON "frontend\assets\icons\icon.ico"
+          !define MUI_UNICON "frontend\assets\icons\icon.ico"
+          
+          !include "MUI2.nsh"
+          
+          OutFile "build\SmartEyeInstaller.exe"
+          InstallDir "`$PROGRAMFILES\`${APPNAME}"
+          Caption "`${APPNAME} Installer"
+          BrandingText "`${APPNAME}"
+          
+          !insertmacro MUI_PAGE_WELCOME
+          !insertmacro MUI_PAGE_DIRECTORY
+          !insertmacro MUI_PAGE_INSTFILES
+          !insertmacro MUI_PAGE_FINISH
+          
+          !insertmacro MUI_UNPAGE_CONFIRM
+          !insertmacro MUI_UNPAGE_INSTFILES
+          
+          !insertmacro MUI_LANGUAGE "English"
+          
+          Section "Install"
+              SetOutPath "`$INSTDIR"
+              File /r "$($distDir.FullName)\*"
+              
+              CreateDirectory "`$SMPROGRAMS\`${APPNAME}"
+              CreateShortcut "`$SMPROGRAMS\`${APPNAME}\`${APPNAME}.lnk" "`$INSTDIR\`${EXEFILE}"
+              CreateShortcut "`$DESKTOP\`${APPNAME}.lnk" "`$INSTDIR\`${EXEFILE}"
+              
+              WriteUninstaller "`$INSTDIR\Uninstall.exe"
+              CreateShortcut "`$SMPROGRAMS\`${APPNAME}\Uninstall.lnk" "`$INSTDIR\Uninstall.exe"
+              
+              WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\`${APPNAME}" "DisplayName" "`${APPNAME}"
+              WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\`${APPNAME}" "UninstallString" "`$INSTDIR\Uninstall.exe"
+              WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\`${APPNAME}" "DisplayIcon" "`$INSTDIR\`${EXEFILE}"
+              WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\`${APPNAME}" "DisplayVersion" "`${VERSION}"
+          SectionEnd
+          
+          Section "Uninstall"
+              RMDir /r "`$INSTDIR"
+              Delete "`$DESKTOP\`${APPNAME}.lnk"
+              Delete "`$SMPROGRAMS\`${APPNAME}\`${APPNAME}.lnk"
+              Delete "`$SMPROGRAMS\`${APPNAME}\Uninstall.lnk"
+              RMDir "`$SMPROGRAMS\`${APPNAME}"
+              DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\`${APPNAME}"
+          SectionEnd
+          "@
+          
+          $nsiContent | Out-File -FilePath "SmartEye.nsi" -Encoding UTF8
+          
+          Write-Host "Compiling installer with LZMA compression (this may take a few minutes)..."
+          & "C:\Program Files (x86)\NSIS\makensis.exe" SmartEye.nsi
+          
+          if ($LASTEXITCODE -ne 0) {
+            throw "NSIS compilation failed with exit code $LASTEXITCODE"
+          }
+          
+          Write-Host "Installer created successfully!"
+
+      - name: Collect release files
+        id: release_files
         shell: pwsh
         run: |
           $appInfo = Get-Content app_info.json | ConvertFrom-Json
-          $version = "$($appInfo.version)"
-          if (-not $version) {
-            throw "app_info.json version is missing"
-          }
-          if ($version -notmatch '^\d+\.\d+') {
-            throw "app_info.json version '$version' does not match expected format (e.g. 1.0 or 1.0.0)"
-          }
-          "app_version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $appName = $appInfo.name
+          $appVersion = $appInfo.version
+          $appBuild = Get-Date -Format "yyyyMMdd"
 
-      - name: Build standalone executable
-        shell: pwsh
-        env:
-          INCLUDE_MODELS: ${{ github.event.inputs.include_models || 'false' }}
-        run: |
-          $buildArgs = @(
-            "--standalone",
-            "--output-dir=build",
-            "--output-filename=SmartEye",
-            "--remove-output",
-            "--lto=no",
-            "--windows-console-mode=disable",
-            "--enable-plugin=pyside6",
-            "--include-package=backend",
-            "--include-package=frontend",
-            "--include-package=utils",
-            "--include-package=psutil",
-            "--include-package=PySide6",
-            "--include-package=shiboken6",
-            "--include-package=reportlab",
-            "--include-package=requests",
-            "--include-package=pyqtgraph",
-            "--include-package=onnx",
-            "--include-package=onnxruntime",
-            "--include-package=insightface",
-            "--include-package=GPUtil",
-            "--include-package=wmi",
-            "--include-package=streamlink",
-            "--include-package-data=reportlab",
-            "--include-package-data=pyqtgraph",
-            "--include-package-data=insightface",
-            "--include-package-data=onnxruntime",
-            "--include-package-data=streamlink",
-            "--include-data-dir=frontend/assets=frontend/assets",
-            "--include-data-file=app_info.json=app_info.json",
-            "--include-data-file=backend/database/schema.sql=backend/database/schema.sql",
-            "--nofollow-import-to=PySide6.QtWebEngine",
-            "--nofollow-import-to=PySide6.QtWebEngineWidgets",
-            "--nofollow-import-to=PySide6.QtWebEngineCore",
-            "--nofollow-import-to=onnxruntime.training",
-            "--nofollow-import-to=unittest",
-            "--nofollow-import-to=test",
-            "--nofollow-import-to=doctest",
-            "--noinclude-data-files=**/tests/**",
-            "--noinclude-data-files=**/test/**",
-            "--assume-yes-for-downloads",
-            "--show-progress",
-            "--show-memory",
-            "main.py"
-          )
-
-          if ($env:INCLUDE_MODELS -eq "true" -and (Test-Path "data/models")) {
-            $buildArgs += "--include-data-dir=data/models=data/models"
+          $installerPath = Join-Path $PWD "build\SmartEyeInstaller.exe"
+          if (-not (Test-Path $installerPath)) {
+            throw "Installer not found at $installerPath"
           }
 
-          python -m nuitka @buildArgs
+          "app_name=$appName"             | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "app_version=$appVersion"       | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "app_build=$appBuild"           | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "installer_path=$installerPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Validate output and size limit
-        id: verify
-        shell: pwsh
-        env:
-          MAX_DIST_MB: ${{ github.event.inputs.max_dist_mb || '3072' }}
-        run: |
-          $distDir = Join-Path $PWD "build\main.dist"
-          $exePath = Join-Path $distDir "SmartEye.exe"
-
-          if (-not (Test-Path $exePath)) {
-            throw "Build failed: SmartEye.exe not found at $exePath"
-          }
-
-          $bytes = (Get-ChildItem -Path $distDir -Recurse -File | Measure-Object -Property Length -Sum).Sum
-          $mb = [math]::Round($bytes / 1MB, 2)
-          $maxMb = [double]$env:MAX_DIST_MB
-
-          if ($mb -gt $maxMb) {
-            throw "Dist size ${mb}MB exceeds limit ${maxMb}MB"
-          }
-
-          "dist_dir=$distDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "dist_mb=$mb" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          Write-Host "Dist size: ${mb}MB"
-
-      - name: Create 7z artifact
-        id: package
-        shell: pwsh
-        run: |
-          $version = "${{ steps.appinfo.outputs.app_version }}"
-          $archiveName = "SmartEye-v$version-main-dist.7z"
-          $archive = Join-Path $PWD "build\$archiveName"
-
-          if (Test-Path $archive) {
-            Remove-Item -Force $archive
-          }
-
-          $distDir = "${{ steps.verify.outputs.dist_dir }}"
-          & "C:\Program Files\7-Zip\7z.exe" a -t7z -m0=lzma2 -mx=9 -mmt=on -ms=on "$archive" "$distDir\*"
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "7-Zip compression failed with exit code $LASTEXITCODE"
-          }
-
-          "archive_name=$archiveName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "artifact_path=$archive" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: SmartEye-main-dist
-          path: ${{ steps.package.outputs.artifact_path }}
-          retention-days: 14
-
-      - name: Create or update GitHub Release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        shell: pwsh
+      - name: Create or update release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
         run: |
-          $version = "${{ steps.appinfo.outputs.app_version }}"
-          $tag = "v$version"
-          $title = "SmartEye $tag"
-          $asset = "${{ steps.package.outputs.artifact_path }}"
+          $appName = "${{ steps.release_files.outputs.app_name }}"
+          $appVersion = "${{ steps.release_files.outputs.app_version }}"
+          $appBuild = "${{ steps.release_files.outputs.app_build }}"
+          $tag  = "v$appVersion"
+          $name = "$appName v$appVersion (build $appBuild)"
+          $repo = "${{ github.repository }}"
+          $installer = "${{ steps.release_files.outputs.installer_path }}"
 
-          gh release view $tag --repo "${{ github.repository }}" *> $null
+          gh release view $tag --repo $repo *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag $asset --repo "${{ github.repository }}" --title $title --generate-notes
+            gh release create $tag $installer --repo $repo --title $name --generate-notes
           } else {
-            gh release upload $tag $asset --repo "${{ github.repository }}" --clobber
+            gh release upload $tag $installer --repo $repo --clobber
           }
