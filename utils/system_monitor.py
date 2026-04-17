@@ -29,6 +29,7 @@ class SystemMonitor:
         self._pdh_failed = False
         self._wmi_gpu_failed = False
         self._wmi_ohm_failed = False
+        self._wmi_enabled = str(os.getenv("SMARTEYE_ENABLE_WMI_MONITOR", "0")).strip().lower() in ("1", "true", "yes")
         self._wmi_instance = None
         self._wmi_ohm_instance = None
         self._gpu_name_cached = ""
@@ -93,7 +94,12 @@ class SystemMonitor:
 
             now = time.time()
 
-            if not found_gpu and not self._wmi_ohm_failed and (now - self._last_ohm_query_ts) >= self._wmi_query_interval_sec:
+            if (
+                self._wmi_enabled
+                and not found_gpu
+                and not self._wmi_ohm_failed
+                and (now - self._last_ohm_query_ts) >= self._wmi_query_interval_sec
+            ):
                 try:
                     self._last_ohm_query_ts = now
                     w = self._get_wmi_ohm()
@@ -107,7 +113,12 @@ class SystemMonitor:
                 except Exception:
                     self._wmi_ohm_failed = True
 
-            if not found_gpu and not self._wmi_gpu_failed and (now - self._last_wmi_gpu_query_ts) >= self._wmi_query_interval_sec:
+            if (
+                self._wmi_enabled
+                and not found_gpu
+                and not self._wmi_gpu_failed
+                and (now - self._last_wmi_gpu_query_ts) >= self._wmi_query_interval_sec
+            ):
                 try:
                     self._last_wmi_gpu_query_ts = now
                     result = self._wmi_gpu_perf()
@@ -152,6 +163,8 @@ class SystemMonitor:
             if not self._cpu_name_long and not self._cpu_name_attempted:
                 self._cpu_name_attempted = True
                 try:
+                    if not self._wmi_enabled:
+                        raise RuntimeError("WMI monitor disabled")
                     import wmi
 
                     w = wmi.WMI()
