@@ -86,12 +86,11 @@ def get_allowed_modules() -> list[str]:
         raw = db.get_setting("insightface_allowed_modules", None)
         if raw:
             mods = _json.loads(raw) if isinstance(raw, str) else raw
-            if isinstance(mods, list) and mods:
-                filtered = [m for m in mods if m in ("detection", "recognition", "genderage")]
-                if "detection" not in filtered:
-                    filtered.insert(0, "detection")
-                if "recognition" not in filtered:
-                    filtered.append("recognition")
+            if isinstance(mods, list):
+                filtered = []
+                for m in mods:
+                    if m in ("detection", "recognition", "genderage") and m not in filtered:
+                        filtered.append(m)
                 if not gender_enabled:
                     filtered = [m for m in filtered if m != "genderage"]
                 return filtered
@@ -108,7 +107,13 @@ def set_allowed_modules(modules: list[str]) -> None:
     import json as _json
 
     try:
-        db.set_setting("insightface_allowed_modules", _json.dumps(modules))
+        cleaned = []
+        for m in (modules or []):
+            if m in ("detection", "recognition", "genderage") and m not in cleaned:
+                cleaned.append(m)
+        if not db.get_bool("gender_inference_enabled", False):
+            cleaned = [m for m in cleaned if m != "genderage"]
+        db.set_setting("insightface_allowed_modules", _json.dumps(cleaned))
     except Exception:
         pass
 

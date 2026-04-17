@@ -465,6 +465,9 @@ class ModelsPage(QWidget):
         sm_hdr_lbl.setStyleSheet(section_kicker_style())
         sm_hdr_l.addWidget(sm_hdr_lbl)
         sm_hdr_l.addStretch()
+        self._fm_global_toggle = ToggleSwitch(active_color=_ACCENT)
+        self._fm_global_toggle.setToolTip("Enable/disable face recognition globally")
+        self._fm_global_toggle.toggled.connect(self._set_face_model_enabled)
         sm_outer.addWidget(sm_hdr)
 
         self._fm_submodels_card = QWidget()
@@ -693,6 +696,10 @@ class ModelsPage(QWidget):
         from backend.models.model_loader import get_face_model
 
         fm = get_face_model()
+        global_enabled = db.get_bool("face_recognition_enabled_global", True)
+        self._fm_global_toggle.blockSignals(True)
+        self._fm_global_toggle.setChecked(global_enabled)
+        self._fm_global_toggle.blockSignals(False)
         if fm.is_loaded:
             providers_str = ", ".join(p.replace("ExecutionProvider", "") for p in (fm.providers_used or [])) or "CPU"
             self._fm_status_dot.setStyleSheet(_DOT_OK_STYLE)
@@ -714,6 +721,23 @@ class ModelsPage(QWidget):
                     self._fm_buffalo_combo.setCurrentIndex(i)
                     break
             self._fm_buffalo_combo.blockSignals(False)
+
+    def _set_face_model_enabled(self, enabled: bool) -> None:
+        try:
+            db.set_setting("face_recognition_enabled_global", "1" if enabled else "0")
+            from utils import config as _cfg
+
+            _cfg.invalidate_cache()
+        except (RuntimeError, AttributeError, TypeError, ValueError, OSError) as exc:
+            logger.exception("Failed to update global face recognition state")
+            QMessageBox.critical(self, "Error", f"Failed to update face recognition state:\n{exc}")
+            return
+        try:
+            mgr = get_manager()
+            mgr.clear_camera_state()
+        except Exception:
+            logger.debug("Failed to clear camera states after face global toggle", exc_info=True)
+        self._flash_status("Saved")
 
     def _refresh_submodels(self) -> None:
         def _drain_layout(lay):
@@ -770,12 +794,25 @@ class ModelsPage(QWidget):
             return
 
         hdr = QHBoxLayout()
-        for text, stretch in [("File", 1), ("Task", 0), ("Status", 0), ("Enabled", 0)]:
+        for text, stretch in [("File", 1), ("Task", 0), ("Status", 0)]:
             lbl = QLabel(text.upper())
             lbl.setStyleSheet(section_kicker_style())
             if not stretch:
                 lbl.setFixedWidth(SIZE_BTN_W_SM)
             hdr.addWidget(lbl, stretch=stretch)
+        enabled_hdr = QWidget()
+        enabled_hdr.setStyleSheet("background: transparent;")
+        enabled_hdr_l = QVBoxLayout(enabled_hdr)
+        enabled_hdr_l.setContentsMargins(0, 0, 0, 0)
+        enabled_hdr_l.setSpacing(0)
+        enabled_hdr_l.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+        enabled_hdr_l.addWidget(self._fm_global_toggle, alignment=Qt.AlignmentFlag.AlignHCenter)
+        enabled_lbl = QLabel("ENABLED")
+        enabled_lbl.setStyleSheet(section_kicker_style())
+        enabled_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+        enabled_hdr_l.addWidget(enabled_lbl, alignment=Qt.AlignmentFlag.AlignHCenter)
+        enabled_hdr.setFixedWidth(SIZE_BTN_W_SM)
+        hdr.addWidget(enabled_hdr)
         self._fm_submodels_vbox.addLayout(hdr)
 
         for i, sm in enumerate(submodels):
@@ -838,6 +875,8 @@ class ModelsPage(QWidget):
         elif not enabled and task in mods:
             mods.remove(task)
         set_allowed_modules(mods)
+        if not self._fm_reload_busy:
+            self._fm_force_reload()
 
     def _fm_on_model_changed(self, idx: int) -> None:
         sel = self._fm_buffalo_combo.itemData(idx) or "buffalo_l"

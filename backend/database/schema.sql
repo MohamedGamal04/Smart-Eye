@@ -203,6 +203,7 @@ INSERT OR IGNORE INTO app_settings VALUES ('gpu_enabled', '1', 'bool', 'Use GPU'
 INSERT OR IGNORE INTO app_settings VALUES ('max_cameras', '4', 'int', 'Max Simultaneous Cameras', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('snapshot_on_alarm', '1', 'bool', 'Save Snapshot on Alarm', 'detection');
 INSERT OR IGNORE INTO app_settings VALUES ('face_similarity_threshold', '0.45', 'float', 'Face Match Threshold', 'detection');
+INSERT OR IGNORE INTO app_settings VALUES ('face_recognition_enabled_global', '1', 'bool', 'Enable Face Recognition', 'detection');
 INSERT OR IGNORE INTO app_settings VALUES ('liveness_check_global', '0', 'bool', 'Require Liveness Globally', 'detection');
 INSERT OR IGNORE INTO app_settings VALUES ('log_retention_days', '90', 'int', 'Log Retention (days)', 'data');
 INSERT OR IGNORE INTO app_settings VALUES ('db_size_limit_bytes', '0', 'int', 'DB Size Limit (bytes)', 'data');

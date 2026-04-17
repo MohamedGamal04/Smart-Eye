@@ -301,6 +301,8 @@ class AddCameraPanel(QWidget):
                                 pid = plug.get("id")
                                 if pid is not None:
                                     db.assign_plugin_to_camera(cam_id, pid)
+                    with contextlib.suppress(Exception):
+                        db.set_setting(f"camera_{cam_id}_plugins_explicit", True)
                     self.done.emit(None, cam_id)
                 except (RuntimeError, AttributeError, TypeError, ValueError, OSError) as exc:
                     self.done.emit(exc, None)

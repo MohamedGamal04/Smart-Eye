@@ -5,7 +5,7 @@ import secrets
 import uuid
 
 
-CURRENT_VERSION = 26
+CURRENT_VERSION = 27
 
 
 def apply(conn):
@@ -63,7 +63,21 @@ def apply(conn):
         _migrate_v25(conn)
     if version < 26:
         _migrate_v26(conn)
+    if version < 27:
+        _migrate_v27(conn)
     conn.execute(f"PRAGMA user_version = {CURRENT_VERSION}")
+    conn.commit()
+
+
+def _migrate_v27(conn):
+    conn.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+        ("face_recognition_enabled_global", "1", "bool", "Enable Face Recognition", "detection"),
+    )
+    conn.execute(
+        "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+        ("bool", "Enable Face Recognition", "detection", "face_recognition_enabled_global"),
+    )
     conn.commit()
 
 
