@@ -1081,6 +1081,10 @@ class CameraDetailPanel(QWidget):
                         db.unassign_plugin_from_camera(cam_id, pid)
                 except (sqlite3.Error, OSError, ValueError):
                     logger.exception("Failed to assign/unassign plugin %s", pid)
+            try:
+                db.set_setting(f"camera_{cam_id}_plugins_explicit", True)
+            except (sqlite3.Error, OSError, ValueError):
+                logger.warning("Failed to persist explicit plugin mode for camera id=%s", cam_id, exc_info=True)
             for pid, cb in plugin_checks.items():
                 if not cb.isChecked():
                     continue

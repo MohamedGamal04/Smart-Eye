@@ -149,6 +149,26 @@ def _adaptive_smoothing_alpha(rel_move, match_iou):
     return 0.76
 
 
+def _adaptive_object_smoothing_alpha(rel_move, match_iou):
+    rel = _as_float(rel_move)
+    iou = _as_float(match_iou)
+
+    if rel >= 1.10:
+        return 0.80
+    if rel >= 0.75:
+        return 0.72
+    if rel >= 0.45:
+        return 0.64
+    if rel >= 0.25:
+        return 0.56
+
+    if iou < 0.25:
+        return 0.62
+    if iou < 0.45:
+        return 0.52
+    return 0.44
+
+
 def _pick_best_prev(candidates, curr_box, allow_entry=None, min_iou=0.10, max_rel_dist=3.0):
     best = None
     best_score = -1e9
@@ -348,10 +368,17 @@ class DetectorManager:
         with self._camera_plugins_lock:
             if camera_id not in self._camera_plugins:
                 cp = db.get_camera_plugins(camera_id)
-                if cp:
+                explicit = False
+                try:
+                    explicit = db.get_bool(f"camera_{camera_id}_plugins_explicit", False)
+                except Exception:
+                    explicit = False
+                if explicit:
+                    # Explicit assignment mode: trust camera-specific list (including empty list).
+                    self._camera_plugins[camera_id] = [p["id"] for p in cp] if cp else []
+                elif cp:
                     self._camera_plugins[camera_id] = [p["id"] for p in cp]
                 else:
-                    # No explicit camera assignment: use currently loaded enabled plugins.
                     with self._plugin_models_lock:
                         self._camera_plugins[camera_id] = list(self._plugin_models.keys())
             return list(self._camera_plugins[camera_id])
@@ -773,6 +800,11 @@ class DetectorManager:
 
     def _apply_smoothing(self, camera_id, faces, objects):
         state = self._get_camera_state(camera_id)
+        stable_raw = config.get("experimental_object_bbox_stabilization", True)
+        if isinstance(stable_raw, str):
+            use_stable_object_bboxes = stable_raw.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            use_stable_object_bboxes = bool(stable_raw)
         with state.smoothing_lock:
             prev = state.smoothing_state
             now = time.time()
@@ -890,8 +922,8 @@ class DetectorManager:
                     curr_box,
                     allow_entry=lambda p: p.get("plugin") == plugin
                     and not (p.get("class") is not None and cls is not None and p.get("class") != cls),
-                    min_iou=0.10,
-                    max_rel_dist=3.0,
+                    min_iou=0.16,
+                    max_rel_dist=2.2,
                 )
 
                 vx = vy = 0.0
@@ -901,15 +933,44 @@ class DetectorManager:
                     cx_curr, cy_curr = _bbox_center(curr_box)
                     move_dist = ((cx_prev - cx_curr) ** 2 + (cy_prev - cy_curr) ** 2) ** 0.5
                     rel_move = move_dist / _bbox_size(curr_box)
-                    alpha = _adaptive_smoothing_alpha(rel_move, best_iou)
-                    o["bbox"] = _smooth_bbox(sb_prev, curr_box, alpha=alpha)
-                    sbx, sby = _bbox_center(o["bbox"])
-                    inst_vx = sbx - cx_prev
-                    inst_vy = sby - cy_prev
-                    prev_vx = _as_float(matched.get("vx", 0.0))
-                    prev_vy = _as_float(matched.get("vy", 0.0))
-                    vx = (0.50 * prev_vx) + (0.50 * inst_vx)
-                    vy = (0.50 * prev_vy) + (0.50 * inst_vy)
+                    if use_stable_object_bboxes:
+                        if best_iou >= 0.72 and rel_move <= 0.045:
+                            o["bbox"] = [int(v) for v in sb_prev]
+                            prev_vx = _as_float(matched.get("vx", 0.0))
+                            prev_vy = _as_float(matched.get("vy", 0.0))
+                            vx = prev_vx * 0.45
+                            vy = prev_vy * 0.45
+                        else:
+                            alpha = _adaptive_object_smoothing_alpha(rel_move, best_iou)
+                            if rel_move < 0.04:
+                                alpha = min(alpha, 0.38)
+                            o["bbox"] = _smooth_bbox(sb_prev, curr_box, alpha=alpha, max_scale_change=0.06)
+                            sbx, sby = _bbox_center(o["bbox"])
+                            inst_vx = sbx - cx_prev
+                            inst_vy = sby - cy_prev
+                            prev_vx = _as_float(matched.get("vx", 0.0))
+                            prev_vy = _as_float(matched.get("vy", 0.0))
+                            vx = (0.75 * prev_vx) + (0.25 * inst_vx)
+                            vy = (0.75 * prev_vy) + (0.25 * inst_vy)
+                            if abs(vx) < 0.14:
+                                vx = 0.0
+                            if abs(vy) < 0.14:
+                                vy = 0.0
+                    else:
+                        alpha = _adaptive_smoothing_alpha(rel_move, best_iou)
+                        alpha = min(0.92, max(0.72, alpha + 0.08))
+                        o["bbox"] = _smooth_bbox(sb_prev, curr_box, alpha=alpha, max_scale_change=0.12)
+                        sbx, sby = _bbox_center(o["bbox"])
+                        inst_vx = sbx - cx_prev
+                        inst_vy = sby - cy_prev
+                        prev_vx = _as_float(matched.get("vx", 0.0))
+                        prev_vy = _as_float(matched.get("vy", 0.0))
+                        vx = (0.55 * prev_vx) + (0.45 * inst_vx)
+                        vy = (0.55 * prev_vy) + (0.45 * inst_vy)
+                        if abs(vx) < 0.10:
+                            vx = 0.0
+                        if abs(vy) < 0.10:
+                            vy = 0.0
 
                 o["track_vx"] = vx
                 o["track_vy"] = vy
@@ -997,6 +1058,9 @@ class DetectorManager:
 
     def _is_face_enabled(self, camera_id):
         try:
+            global_enabled = bool(config.get("face_recognition_enabled_global", True))
+            if not global_enabled:
+                return False
             cam = self._get_camera_settings_cached(camera_id)
             return True if cam is None else bool(cam.get("face_recognition", 1))
         except Exception:

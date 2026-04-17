@@ -99,6 +99,7 @@ class DashboardPage(QWidget):
         self._alarm_badges = {}
         self._state_labels = {}
         self._camera_plugin_names = {}
+        self._last_hud_counts_refresh = 0.0
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -449,7 +450,6 @@ class DashboardPage(QWidget):
             state.get("face_time_ms", 0),
             state.get("object_time_ms", 0),
         )
-        self._update_providers()
 
     def _on_fps(self, camera_id, fps):
 
@@ -467,6 +467,15 @@ class DashboardPage(QWidget):
         if err:
             self._set_hud(err, _DANGER)
             return
+        self._update_hud_counts_throttled()
+
+    def _update_hud_counts_throttled(self, interval_sec: float = 1.0):
+        import time
+
+        now = time.monotonic()
+        if (now - self._last_hud_counts_refresh) < interval_sec:
+            return
+        self._last_hud_counts_refresh = now
         self._update_hud_counts()
 
     def _update_alarms(self, state):
