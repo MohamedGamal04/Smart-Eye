@@ -468,6 +468,7 @@ class ModelsPage(QWidget):
         self._fm_global_toggle = ToggleSwitch(active_color=_ACCENT)
         self._fm_global_toggle.setToolTip("Enable/disable face recognition globally")
         self._fm_global_toggle.toggled.connect(self._set_face_model_enabled)
+        sm_hdr_l.addWidget(self._fm_global_toggle, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         sm_outer.addWidget(sm_hdr)
 
         self._fm_submodels_card = QWidget()
@@ -794,25 +795,12 @@ class ModelsPage(QWidget):
             return
 
         hdr = QHBoxLayout()
-        for text, stretch in [("File", 1), ("Task", 0), ("Status", 0)]:
+        for text, stretch in [("File", 1), ("Task", 0), ("Status", 0), ("Enabled", 0)]:
             lbl = QLabel(text.upper())
             lbl.setStyleSheet(section_kicker_style())
             if not stretch:
                 lbl.setFixedWidth(SIZE_BTN_W_SM)
             hdr.addWidget(lbl, stretch=stretch)
-        enabled_hdr = QWidget()
-        enabled_hdr.setStyleSheet("background: transparent;")
-        enabled_hdr_l = QVBoxLayout(enabled_hdr)
-        enabled_hdr_l.setContentsMargins(0, 0, 0, 0)
-        enabled_hdr_l.setSpacing(0)
-        enabled_hdr_l.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
-        enabled_hdr_l.addWidget(self._fm_global_toggle, alignment=Qt.AlignmentFlag.AlignHCenter)
-        enabled_lbl = QLabel("ENABLED")
-        enabled_lbl.setStyleSheet(section_kicker_style())
-        enabled_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-        enabled_hdr_l.addWidget(enabled_lbl, alignment=Qt.AlignmentFlag.AlignHCenter)
-        enabled_hdr.setFixedWidth(SIZE_BTN_W_SM)
-        hdr.addWidget(enabled_hdr)
         self._fm_submodels_vbox.addLayout(hdr)
 
         for i, sm in enumerate(submodels):
@@ -841,11 +829,14 @@ class ModelsPage(QWidget):
             task_lbl.setStyleSheet(text_style(_TEXT_SEC, size=FONT_SIZE_LABEL))
             rl.addWidget(task_lbl)
 
-            status_dot = QLabel("●")
-            status_dot.setFixedWidth(SIZE_BTN_W_SM)
-            status_dot.setStyleSheet(text_style(_SUCCESS if sm["loaded"] else _TEXT_MUTED, size=FONT_SIZE_SUBHEAD))
-            status_dot.setToolTip("Loaded" if sm["loaded"] else "Not loaded / disabled")
-            rl.addWidget(status_dot)
+            loaded = bool(sm.get("loaded"))
+            status_txt = QLabel("Active" if loaded else "Inactive")
+            status_txt.setFixedWidth(SIZE_BTN_W_SM)
+            status_txt.setStyleSheet(
+                text_style(_SUCCESS if loaded else _TEXT_SEC, size=FONT_SIZE_LABEL, weight=FONT_WEIGHT_SEMIBOLD)
+            )
+            status_txt.setToolTip("Sub-model is loaded and ready" if loaded else "Sub-model is not loaded")
+            rl.addWidget(status_txt)
 
             toggle = ToggleSwitch(active_color=_ACCENT)
             toggle.setChecked(sm["enabled"])
