@@ -22,7 +22,7 @@ from frontend.styles._colors import (
     _ACCENT_HI,
     _ACCENT_HI_BG_03,
 )
-from frontend.styles._btn_styles import _PRIMARY_BTN, _TEXT_BTN_BLUE, _TEXT_BTN_RED, _TEXT_BTN_RED_CONFIRM
+from frontend.styles._btn_styles import _PRIMARY_BTN, _TEXT_BTN_BLUE, _TEXT_BTN_GHOST, _TEXT_BTN_RED, _TEXT_BTN_RED_CONFIRM
 from frontend.ui_tokens import (
     FONT_SIZE_BODY,
     FONT_SIZE_CAPTION,

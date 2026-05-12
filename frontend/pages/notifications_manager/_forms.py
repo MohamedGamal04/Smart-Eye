@@ -3,6 +3,7 @@
 import logging
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -21,6 +22,7 @@ from shiboken6 import isValid
 from backend.repository import db
 from backend.notifications.email_notifier import test_email
 from backend.notifications.webhook_notifier import test_webhook
+from frontend.app_theme import safe_set_point_size
 from frontend.styles._hero_header import make_hero_header
 from frontend.styles._banner_styles import make_edit_banner
 from frontend.styles._btn_styles import _SECONDARY_BTN
@@ -28,7 +30,14 @@ from frontend.styles.page_styles import divider_style, muted_label_style, sectio
 from frontend.widgets.toast import show_toast
 from frontend.widgets.confirm_delete_button import ConfirmDeleteButton
 from frontend.widgets.toggle_switch import ToggleSwitch
-from frontend.widgets.action_feedback import build_status_label, flash_status, make_close_button, make_save_button
+from frontend.widgets.password_visibility import attach_password_visibility_toggle
+from frontend.widgets.action_feedback import (
+    build_status_label,
+    flash_status,
+    make_close_button,
+    make_manager_footer_layout,
+    make_save_button,
+)
 
 from frontend.styles._input_styles import _FORM_INPUT_TITLE
 from frontend.styles._colors import (
@@ -54,12 +63,12 @@ from frontend.ui_tokens import (
     FONT_WEIGHT_NORMAL,
     RADIUS_6,
     RADIUS_LG,
-    SIZE_BTN_W_54,
     SIZE_BTN_W_72,
     SIZE_BTN_W_88,
     SIZE_BTN_W_MD,
     SIZE_BTN_W_SM,
     SIZE_BTN_W_80,
+    SIZE_CONTROL_32,
     SIZE_CONTROL_MD,
     SIZE_CONTROL_SM,
     SIZE_ITEM_SM,
@@ -81,6 +90,7 @@ from frontend.ui_tokens import (
 from ._constants import (
     _PRIMARY_BTN,
     _TEXT_BTN_BLUE,
+    _TEXT_BTN_GHOST,
     _TEXT_BTN_RED,
     _TEXT_BTN_RED_CONFIRM,
     _combo_ss,
@@ -168,25 +178,8 @@ class SmtpPanel(QWidget):
         self._smtp_pass = QLineEdit()
         self._smtp_pass.setEchoMode(QLineEdit.EchoMode.Password)
         self._smtp_pass.setPlaceholderText("App password or SMTP password")
-        show_btn = QPushButton("Show")
-        show_btn.setFixedHeight(SIZE_CONTROL_SM)
-        show_btn.setFixedWidth(SIZE_BTN_W_54)
-        show_btn.setCheckable(True)
-        show_btn.setStyleSheet(
-            f"QPushButton{{border:{SPACE_XXXS}px solid {_BORDER};border-radius:{RADIUS_6}px;"
-            f"background:transparent;color:{_TEXT_SEC};font-size:{FONT_SIZE_CAPTION}px;min-height:{SIZE_ITEM_SM}px;}}"
-            f"QPushButton:hover{{color:{_TEXT_PRI};}}"
-            f"QPushButton:checked{{background:{_ACCENT_BG_12};"
-            f"color:{_ACCENT_HI};border-color:{_ACCENT};}}"
-        )
-        show_btn.toggled.connect(
-            lambda c: (
-                self._smtp_pass.setEchoMode(QLineEdit.EchoMode.Normal if c else QLineEdit.EchoMode.Password),
-                show_btn.setText("Hide" if c else "Show"),
-            )
-        )
+        attach_password_visibility_toggle(self._smtp_pass)
         ph.addWidget(self._smtp_pass, stretch=1)
-        ph.addWidget(show_btn)
         body_l.addWidget(_srow("Password", pw_wrap))
 
         hint_fr = QFrame()
@@ -346,33 +339,54 @@ class ProfilePanel(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        name = p.get("name", "New Notification Profile" if not editing else "Notification Profile")
-        subtitle = p.get("endpoint", "") or "No target set"
-        ptype = (p.get("type") or "email").upper() if editing else "NEW"
-        type_badge = QLabel(ptype)
-        type_badge.setStyleSheet(
-            f"font-size:{FONT_SIZE_MICRO}px; font-weight:{FONT_WEIGHT_BOLD}; "
-            f"padding:{SPACE_3}px {SPACE_10}px; border-radius:{RADIUS_LG}px; "
-            f"background:{_ACCENT_BG_12}; color:{_ACCENT_HI};"
-        )
-        badge_wrap = QFrame()
-        badge_wrap.setFixedSize(SIZE_ROW_72, SIZE_ROW_72)
-        badge_wrap.setStyleSheet(
-            f"QFrame {{ background: {_BG_RAISED}; border: {SPACE_XXXS}px solid {_BORDER_DIM}; border-radius: {RADIUS_LG}px; }}"
-        )
-        bw = QVBoxLayout(badge_wrap)
-        bw.setContentsMargins(SPACE_3, SPACE_3, SPACE_3, SPACE_3)
-        bw.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        bw.addWidget(type_badge)
-        root.addWidget(
-            make_hero_header(
-                "",
-                name,
-                subtitle,
-                left_widget=badge_wrap,
-                parent=self,
+        if not editing:
+            banner = QFrame()
+            banner.setStyleSheet(f"QFrame{{background:{_BG_RAISED};border:none;}}")
+            bh = QHBoxLayout(banner)
+            bh.setContentsMargins(SPACE_20, SPACE_10, SPACE_20, SPACE_10)
+            bh.setSpacing(SPACE_MD)
+            nf = QFont()
+            safe_set_point_size(nf, FONT_SIZE_BODY)
+            nf.setBold(True)
+            title = QLabel("Add Profile")
+            title.setFont(nf)
+            title.setStyleSheet(f"color:{_TEXT_PRI};")
+            bh.addWidget(title)
+            bh.addStretch()
+            close_x = QPushButton("✕")
+            close_x.setFixedSize(SIZE_CONTROL_32, SIZE_CONTROL_32)
+            close_x.setStyleSheet(_TEXT_BTN_GHOST + f"border-radius:{RADIUS_6}px;")
+            close_x.clicked.connect(self.close_requested.emit)
+            bh.addWidget(close_x)
+            root.addWidget(banner)
+        else:
+            name = p.get("name", "Notification Profile")
+            subtitle = p.get("endpoint", "") or "No target set"
+            ptype = (p.get("type") or "email").upper()
+            type_badge = QLabel(ptype)
+            type_badge.setStyleSheet(
+                f"font-size:{FONT_SIZE_MICRO}px; font-weight:{FONT_WEIGHT_BOLD}; "
+                f"padding:{SPACE_3}px {SPACE_10}px; border-radius:{RADIUS_LG}px; "
+                f"background:{_ACCENT_BG_12}; color:{_ACCENT_HI};"
             )
-        )
+            badge_wrap = QFrame()
+            badge_wrap.setFixedSize(SIZE_ROW_72, SIZE_ROW_72)
+            badge_wrap.setStyleSheet(
+                f"QFrame {{ background: {_BG_RAISED}; border: {SPACE_XXXS}px solid {_BORDER_DIM}; border-radius: {RADIUS_LG}px; }}"
+            )
+            bw = QVBoxLayout(badge_wrap)
+            bw.setContentsMargins(SPACE_3, SPACE_3, SPACE_3, SPACE_3)
+            bw.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            bw.addWidget(type_badge)
+            root.addWidget(
+                make_hero_header(
+                    "",
+                    name,
+                    subtitle,
+                    left_widget=badge_wrap,
+                    parent=self,
+                )
+            )
 
         self._edit_banner = make_edit_banner(f"Editing — {p.get('name', '')}", self)
         self._edit_banner.setVisible(editing and self._edit_mode)
@@ -394,6 +408,7 @@ class ProfilePanel(QWidget):
         if view_mode:
             body_l.setContentsMargins(SPACE_XL, SPACE_LG, SPACE_XL, SPACE_LG)
             body_l.setSpacing(SPACE_XXS)
+
             def _info_row(label: str, value: str):
                 w = QWidget()
                 w.setStyleSheet("background:transparent;border:none;")
@@ -492,6 +507,7 @@ class ProfilePanel(QWidget):
             self._e_auth = QLineEdit(p.get("auth_token", ""))
             self._e_auth.setPlaceholderText("Bearer token (optional)")
             self._e_auth.setEchoMode(QLineEdit.EchoMode.Password)
+            attach_password_visibility_toggle(self._e_auth)
             self._auth_row = _srow("Auth Token", self._e_auth)
             body_l.addWidget(self._auth_row)
 
@@ -522,10 +538,7 @@ class ProfilePanel(QWidget):
         div.setStyleSheet(divider_style(_BORDER_DIM))
         root.addWidget(div)
 
-        ab = QHBoxLayout()
-        ab.setContentsMargins(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD)
-        ab.setSpacing(SPACE_SM)
-
+        del_btn = None
         if editing:
             pid = p.get("id")
             del_btn = ConfirmDeleteButton("Delete", "Sure?")
@@ -533,7 +546,6 @@ class ProfilePanel(QWidget):
             del_btn.setFixedWidth(SIZE_BTN_W_MD)
             del_btn.set_button_styles(_TEXT_BTN_RED, _TEXT_BTN_RED_CONFIRM)
             del_btn.set_confirm_callback(lambda: self.delete_requested.emit(pid))
-            ab.addWidget(del_btn)
 
         test_btn = QPushButton("Test")
         test_btn.setFixedHeight(SIZE_CONTROL_MD)
@@ -542,35 +554,40 @@ class ProfilePanel(QWidget):
         test_btn.setVisible(editing)
         test_btn.clicked.connect(lambda: self._test_profile(p))
         self._test_btn = test_btn
-        ab.addWidget(test_btn)
 
         self._profile_status_lbl = build_status_label()
-        ab.addWidget(self._profile_status_lbl)
-
-        ab.addStretch()
 
         self._cancel_btn = make_close_button("Cancel")
         self._cancel_btn.setFixedWidth(SIZE_BTN_W_SM)
         self._cancel_btn.clicked.connect(self.close_requested.emit)
-        ab.addWidget(self._cancel_btn)
 
         self._close_btn = make_close_button("Close")
         self._close_btn.setFixedWidth(SIZE_BTN_W_80)
         self._close_btn.clicked.connect(self.close_requested.emit)
-        ab.addWidget(self._close_btn)
 
         self._edit_btn = QPushButton("Edit")
         self._edit_btn.setFixedHeight(SIZE_CONTROL_MD)
         self._edit_btn.setFixedWidth(SIZE_BTN_W_80)
         self._edit_btn.setStyleSheet(_TEXT_BTN_BLUE)
         self._edit_btn.clicked.connect(self._toggle_edit_mode)
-        ab.addWidget(self._edit_btn)
 
         self._save_btn = make_save_button("Save")
         self._save_btn.clicked.connect(self._do_save)
-        ab.addWidget(self._save_btn)
-
-        root.addLayout(ab)
+        root.addLayout(
+            make_manager_footer_layout(
+                left_widget=del_btn,
+                center_widget=test_btn,
+                right_widgets=[
+                    self._profile_status_lbl,
+                    self._cancel_btn,
+                    self._close_btn,
+                    self._edit_btn,
+                    self._save_btn,
+                ],
+                margins=(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD),
+                spacing=SPACE_SM,
+            )
+        )
 
         self._set_edit_mode(self._edit_mode or not editing)
 
@@ -589,7 +606,7 @@ class ProfilePanel(QWidget):
                 self._edit_btn.setVisible(True)
                 if enabled:
                     self._edit_btn.setText("Save")
-                    self._edit_btn.setStyleSheet(_PRIMARY_BTN)
+                    self._edit_btn.setStyleSheet(_TEXT_BTN_BLUE)
                 else:
                     self._edit_btn.setText("Edit")
                     self._edit_btn.setStyleSheet(_TEXT_BTN_BLUE)

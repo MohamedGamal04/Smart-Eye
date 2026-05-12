@@ -23,6 +23,16 @@ def _normalize_operator(op: str) -> str:
     return aliases.get(val, val)
 
 
+def _should_evaluate_unknown(attr: str, operator: str, expected) -> bool:
+    """Allow explicit unknown matching (e.g. identity == unknown)."""
+    if str(attr or "").strip().lower() != "identity":
+        return False
+    op = _normalize_operator(operator)
+    if op not in ("eq", "neq"):
+        return False
+    return str(expected or "").strip().lower() == "unknown"
+
+
 def _compile_condition(cond):
     attr = cond["attribute"]
     op = _normalize_operator(cond["operator"])
@@ -70,7 +80,7 @@ def _compile_condition(cond):
                     return _e not in {str(o.get("class_name") or o.get("class") or "").lower() for o in objs}
             else:
                 check_fn = None
-        return (attr, True, check_fn)
+        return (attr, True, check_fn, False)
 
     try:
         exp_num = float(expected)
@@ -113,7 +123,8 @@ def _compile_condition(cond):
             return _es in a
         return False
 
-    return (attr, False, check_val)
+    allow_unknown_eval = _should_evaluate_unknown(attr, op, expected)
+    return (attr, False, check_val, allow_unknown_eval)
 
 
 class RuleEngine:
@@ -180,13 +191,16 @@ class RuleEngine:
         objs = state.get("object_bboxes", []) or []
         detections = state.get("detections", {})
         for rule in sorted_rules:
-            if rule.get("zone_id") and state.get("zone_id") != rule["zone_id"]:
-                continue
             compiled = self._get_compiled_conditions_cached(rule["id"])
             if not compiled:
                 continue
             results = []
-            for attr, is_obj, check_fn in compiled:
+            for item in compiled:
+                if len(item) == 4:
+                    attr, is_obj, check_fn, allow_unknown_eval = item
+                else:
+                    attr, is_obj, check_fn = item
+                    allow_unknown_eval = False
                 if check_fn is None:
                     results.append(None)
                     continue
@@ -197,9 +211,11 @@ class RuleEngine:
                         results.append(None)
                 else:
                     actual = _normalize_attr_value(attr, detections.get(attr))
-                    if actual is None or actual == "unknown":
+                    if (actual is None or actual == "unknown") and not allow_unknown_eval:
                         results.append(None)
                         continue
+                    if actual is None:
+                        actual = "unknown"
                     try:
                         results.append(check_fn(actual))
                     except Exception:
@@ -305,11 +321,14 @@ def simulate_rule(rule_id, state):
             details.append(f"{attr} {cond['operator']} {cond['value']} => {match} (objects: {len(objs)})")
             continue
         actual = _normalize_attr_value(attr, state.get("detections", {}).get(attr))
-        if actual is None or actual == "unknown":
+        expected = _normalize_attr_value(attr, cond["value"])
+        if (actual is None or actual == "unknown") and not _should_evaluate_unknown(attr, cond["operator"], expected):
             results.append(None)
             details.append(f"{attr}: skipped (unknown)")
             continue
-        match = _evaluate_condition(actual, cond["operator"], _normalize_attr_value(attr, cond["value"]))
+        if actual is None:
+            actual = "unknown"
+        match = _evaluate_condition(actual, cond["operator"], expected)
         results.append(match)
         details.append(f"{attr} {cond['operator']} {cond['value']} => {match} (actual: {actual})")
     valid = [r for r in results if r is not None]

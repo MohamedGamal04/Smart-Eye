@@ -61,7 +61,7 @@ _ICON_SIZE = QSize(16, 16)
 _TABS: list[tuple[str, str]] = [
     ("General", "settings.png"),
     ("Performance", "dashboard.png"),
-    ("Detection", "faces.png"),
+    ("Detection and recogention", "faces.png"),
     ("Accounts", "account.png"),
     ("Database", "folder.png"),
 ]

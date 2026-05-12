@@ -6,7 +6,7 @@ import os
 import sqlite3
 
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QSettings
-from PySide6.QtGui import QColor, QFont, QIcon, QPixmap
+from PySide6.QtGui import QColor, QFont, QIcon, QPixmap, QTransform
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -280,6 +280,8 @@ class ModelsPage(QWidget):
         self._fm_load_worker = None
         self._fm_progress = None
         self._fm_reload_timer = None
+        self._fm_status_spin_timer = None
+        self._fm_btn_spin_timer = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -463,6 +465,10 @@ class ModelsPage(QWidget):
         sm_hdr_lbl.setStyleSheet(section_kicker_style())
         sm_hdr_l.addWidget(sm_hdr_lbl)
         sm_hdr_l.addStretch()
+        self._fm_global_toggle = ToggleSwitch(active_color=_ACCENT)
+        self._fm_global_toggle.setToolTip("Enable/disable face recognition globally")
+        self._fm_global_toggle.toggled.connect(self._set_face_model_enabled)
+        sm_hdr_l.addWidget(self._fm_global_toggle, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         sm_outer.addWidget(sm_hdr)
 
         self._fm_submodels_card = QWidget()
@@ -470,11 +476,22 @@ class ModelsPage(QWidget):
         self._fm_submodels_vbox = QVBoxLayout(self._fm_submodels_card)
         self._fm_submodels_vbox.setContentsMargins(SPACE_20, SPACE_MD, SPACE_20, SPACE_LG)
         self._fm_submodels_vbox.setSpacing(SPACE_XS)
+        self._fm_submodels_vbox.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         _placeholder = QLabel("Load the model first to see sub-modules.")
         _placeholder.setStyleSheet(_SUBMODEL_EMPTY_STYLE)
         self._fm_submodels_vbox.addWidget(_placeholder)
-        sm_outer.addWidget(self._fm_submodels_card)
+
+        self._fm_submodels_scroll = QScrollArea()
+        self._fm_submodels_scroll.setWidgetResizable(True)
+        self._fm_submodels_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._fm_submodels_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._fm_submodels_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._fm_submodels_scroll.setStyleSheet("border: none; background: transparent;")
+        self._fm_submodels_scroll.setWidget(self._fm_submodels_card)
+        self._fm_submodels_scroll.setMinimumHeight(150)
+        self._fm_submodels_scroll.setMaximumHeight(260)
+        sm_outer.addWidget(self._fm_submodels_scroll)
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(SPACE_LG)
@@ -680,6 +697,10 @@ class ModelsPage(QWidget):
         from backend.models.model_loader import get_face_model
 
         fm = get_face_model()
+        global_enabled = db.get_bool("face_recognition_enabled_global", True)
+        self._fm_global_toggle.blockSignals(True)
+        self._fm_global_toggle.setChecked(global_enabled)
+        self._fm_global_toggle.blockSignals(False)
         if fm.is_loaded:
             providers_str = ", ".join(p.replace("ExecutionProvider", "") for p in (fm.providers_used or [])) or "CPU"
             self._fm_status_dot.setStyleSheet(_DOT_OK_STYLE)
@@ -701,6 +722,23 @@ class ModelsPage(QWidget):
                     self._fm_buffalo_combo.setCurrentIndex(i)
                     break
             self._fm_buffalo_combo.blockSignals(False)
+
+    def _set_face_model_enabled(self, enabled: bool) -> None:
+        try:
+            db.set_setting("face_recognition_enabled_global", "1" if enabled else "0")
+            from utils import config as _cfg
+
+            _cfg.invalidate_cache()
+        except (RuntimeError, AttributeError, TypeError, ValueError, OSError) as exc:
+            logger.exception("Failed to update global face recognition state")
+            QMessageBox.critical(self, "Error", f"Failed to update face recognition state:\n{exc}")
+            return
+        try:
+            mgr = get_manager()
+            mgr.clear_camera_state()
+        except Exception:
+            logger.debug("Failed to clear camera states after face global toggle", exc_info=True)
+        self._flash_status("Saved")
 
     def _refresh_submodels(self) -> None:
         def _drain_layout(lay):
@@ -791,21 +829,24 @@ class ModelsPage(QWidget):
             task_lbl.setStyleSheet(text_style(_TEXT_SEC, size=FONT_SIZE_LABEL))
             rl.addWidget(task_lbl)
 
-            status_dot = QLabel("●")
-            status_dot.setFixedWidth(SIZE_BTN_W_SM)
-            status_dot.setStyleSheet(text_style(_SUCCESS if sm["loaded"] else _TEXT_MUTED, size=FONT_SIZE_SUBHEAD))
-            status_dot.setToolTip("Loaded" if sm["loaded"] else "Not loaded / disabled")
-            rl.addWidget(status_dot)
+            loaded = bool(sm.get("loaded"))
+            status_txt = QLabel("Active" if loaded else "Inactive")
+            status_txt.setFixedWidth(SIZE_BTN_W_SM)
+            status_txt.setStyleSheet(
+                text_style(_SUCCESS if loaded else _TEXT_SEC, size=FONT_SIZE_LABEL, weight=FONT_WEIGHT_SEMIBOLD)
+            )
+            status_txt.setToolTip("Sub-model is loaded and ready" if loaded else "Sub-model is not loaded")
+            rl.addWidget(status_txt)
 
             toggle = ToggleSwitch(active_color=_ACCENT)
             toggle.setChecked(sm["enabled"])
             toggle.setFixedWidth(SIZE_BTN_W_SM)
-            if sm["required"]:
+            _task = str(sm.get("task") or "")
+            if _task not in ("detection", "recognition", "genderage"):
                 toggle.setEnabled(False)
-                toggle.setToolTip("Required — cannot be disabled")
+                toggle.setToolTip("This sub-model cannot be toggled from here")
             else:
                 toggle.setToolTip("Toggle to enable/disable this sub-module (requires model reload)")
-                _task = sm["task"]
                 toggle.toggled.connect(lambda checked, t=_task: self._on_submodel_toggled(t, checked))
             rl.addWidget(toggle)
             row_wrap.addWidget(row_inner)
@@ -825,6 +866,8 @@ class ModelsPage(QWidget):
         elif not enabled and task in mods:
             mods.remove(task)
         set_allowed_modules(mods)
+        if not self._fm_reload_busy:
+            self._fm_force_reload()
 
     def _fm_on_model_changed(self, idx: int) -> None:
         sel = self._fm_buffalo_combo.itemData(idx) or "buffalo_l"
@@ -862,6 +905,115 @@ class ModelsPage(QWidget):
         if folder:
             self._fm_model_path.setText(folder)
 
+    def _start_fm_status_spinner(self) -> None:
+        base_icon = QPixmap("frontend/assets/icons/loading.png")
+        if base_icon.isNull():
+            return
+        self._stop_fm_status_spinner()
+        self._fm_status_dot.setText("")
+        angle = 0
+
+        def _render_frame() -> None:
+            rotated = base_icon.transformed(QTransform().rotate(angle), Qt.TransformationMode.SmoothTransformation)
+            self._fm_status_dot.setPixmap(
+                rotated.scaled(
+                    16,
+                    16,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+
+        def _tick() -> None:
+            nonlocal angle
+            angle = (angle + 18) % 360
+            _render_frame()
+
+        _render_frame()
+        self._fm_status_spin_timer = QTimer(self)
+        self._fm_status_spin_timer.setInterval(40)
+        self._fm_status_spin_timer.timeout.connect(_tick)
+        self._fm_status_spin_timer.start()
+
+    def _stop_fm_status_spinner(self) -> None:
+        if self._fm_status_spin_timer is not None:
+            self._fm_status_spin_timer.stop()
+            self._fm_status_spin_timer = None
+        self._fm_status_dot.setPixmap(QPixmap())
+        self._fm_status_dot.setText("●")
+
+    def _start_fm_button_spinner(self) -> None:
+        base_icon = QPixmap("frontend/assets/icons/loading.png")
+        if base_icon.isNull():
+            return
+        self._stop_fm_button_spinner()
+        angle = 0
+
+        def _render_frame() -> None:
+            rotated = base_icon.transformed(QTransform().rotate(angle), Qt.TransformationMode.SmoothTransformation)
+            self._fm_save_reload_btn.setIcon(
+                QIcon(
+                    rotated.scaled(
+                        14,
+                        14,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+            )
+
+        def _tick() -> None:
+            nonlocal angle
+            angle = (angle + 18) % 360
+            _render_frame()
+
+        _render_frame()
+        self._fm_btn_spin_timer = QTimer(self)
+        self._fm_btn_spin_timer.setInterval(40)
+        self._fm_btn_spin_timer.timeout.connect(_tick)
+        self._fm_btn_spin_timer.start()
+
+    def _stop_fm_button_spinner(self) -> None:
+        if self._fm_btn_spin_timer is not None:
+            self._fm_btn_spin_timer.stop()
+            self._fm_btn_spin_timer = None
+        self._fm_save_reload_btn.setIcon(QIcon())
+
+    def _apply_loading_icon(self, dlg: QProgressDialog) -> None:
+        base_icon = QPixmap("frontend/assets/icons/loading.png")
+        if base_icon.isNull():
+            return
+
+        icon_lbl = QLabel()
+        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        angle = 0
+
+        def _render_frame() -> None:
+            rotated = base_icon.transformed(QTransform().rotate(angle), Qt.TransformationMode.SmoothTransformation)
+            icon_lbl.setPixmap(
+                rotated.scaled(
+                    36,
+                    36,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+
+        def _tick() -> None:
+            nonlocal angle
+            angle = (angle + 18) % 360
+            _render_frame()
+
+        _render_frame()
+        timer = QTimer(dlg)
+        timer.setInterval(40)
+        timer.timeout.connect(_tick)
+        timer.start()
+
+        layout = dlg.layout()
+        if layout is not None:
+            layout.insertWidget(0, icon_lbl, 0, Qt.AlignmentFlag.AlignHCenter)
+
     def _fm_reload_model(self, force: bool = False) -> None:
         if self._fm_reload_busy:
             return
@@ -871,11 +1023,12 @@ class ModelsPage(QWidget):
             old.quit()
             old.wait(800)
         path = self._fm_model_path.text().strip()
-        self._fm_status_dot.setStyleSheet(_DOT_WARN_STYLE)
-        self._fm_model_status.setText("⏳ Loading model — please wait…")
+        self._start_fm_status_spinner()
+        self._fm_model_status.setText("Loading model — please wait…")
         self._fm_model_status.setStyleSheet(_STATUS_WARN_STYLE)
         self._fm_save_reload_btn.setEnabled(False)
         self._fm_save_reload_btn.setText("Loading...")
+        self._start_fm_button_spinner()
 
         from PySide6.QtCore import QThread, Signal as _Sig
 
@@ -906,6 +1059,7 @@ class ModelsPage(QWidget):
                 self._fm_progress.close()
         self._fm_progress = QProgressDialog("Loading InsightFace model…", None, 0, 0, self)
         self._fm_progress.setWindowTitle("Loading")
+        self._apply_loading_icon(self._fm_progress)
         apply_popup_theme(
             self._fm_progress,
             f"""
@@ -929,6 +1083,8 @@ class ModelsPage(QWidget):
                 self._fm_progress = None
             self._fm_save_reload_btn.setEnabled(True)
             self._fm_save_reload_btn.setText("Save")
+            self._stop_fm_button_spinner()
+            self._stop_fm_status_spinner()
             if ok:
                 from backend.models.model_loader import get_face_model
 

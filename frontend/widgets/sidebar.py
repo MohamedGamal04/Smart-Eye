@@ -4,7 +4,7 @@ from pathlib import Path
 import json as _json
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QTimer, QSize
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QBrush, QPixmap, QFontDatabase, QIcon
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QBrush, QPixmap, QIcon, QRegion
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -85,6 +85,7 @@ _LOGO_SIZE_EXPANDED = 128
 _LOGO_SIZE_WORDMARK = 62
 _LOGO_SIZE_COLLAPSED_ICON = 36
 _LOGO_SIZE_EXPANDED_ICON = 46
+_LOGO_TRIMMED_PIX: QPixmap | None = None
 
 
 def _read_app_info() -> dict:
@@ -151,29 +152,16 @@ class _LogoMonogram(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedSize(size, size)
         self._pix = None
+        global _LOGO_TRIMMED_PIX
         try:
-            pix = QPixmap(LOGO_ICON_PATH)
-            if not pix.isNull():
-                img = pix.toImage().convertToFormat(pix.toImage().Format.Format_ARGB32)
-                left, top = img.width(), img.height()
-                right, bottom = 0, 0
-                found = False
-                for y in range(img.height()):
-                    for x in range(img.width()):
-                        if img.pixelColor(x, y).alpha() > 0:
-                            found = True
-                            if x < left:
-                                left = x
-                            if y < top:
-                                top = y
-                            if x > right:
-                                right = x
-                            if y > bottom:
-                                bottom = y
-                if found and right >= left and bottom >= top:
-                    self._pix = pix.copy(left, top, right - left + 1, bottom - top + 1)
-                else:
-                    self._pix = pix
+            if _LOGO_TRIMMED_PIX is None:
+                pix = QPixmap(LOGO_ICON_PATH)
+                if not pix.isNull():
+                    # Use Qt's native alpha-mask bounds (fast C++ path) instead of Python pixel loops.
+                    mask = pix.mask()
+                    rect = QRegion(mask).boundingRect() if not mask.isNull() else pix.rect()
+                    _LOGO_TRIMMED_PIX = pix.copy(rect) if rect.isValid() else pix
+            self._pix = _LOGO_TRIMMED_PIX
         except (OSError, RuntimeError):
             self._pix = None
 
@@ -426,7 +414,7 @@ class SidebarWidget(QWidget):
         self._bottom_divider = None
         self._scroll = None
         self._logout_icon_path = "frontend/assets/icons/logout.png"
-        self._logo_font_family = "ELECTRIC CITY"
+        self._logo_font_family = "Bahnschrift SemiCondensed"
 
         self.setFixedWidth(_SIDEBAR_COLLAPSED)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
@@ -478,29 +466,20 @@ class SidebarWidget(QWidget):
 
         self._logo_lbl = QLabel("mart Eye", logo_row)
         logo_color = _TEXT_PRI
-        font_family = "ELECTRIC CITY"
-        try:
-            font_path = str((Path(__file__).resolve().parents[1] / "assets" / "fonts" / "ELECTRIC CITY-Bold.otf"))
-            font_id = QFontDatabase.addApplicationFont(font_path)
-            if font_id != -1:
-                fams = QFontDatabase.applicationFontFamilies(font_id)
-                if fams:
-                    font_family = fams[0]
-        except (OSError, RuntimeError):
-            pass
+        font_family = "Bahnschrift SemiCondensed"
         self._logo_font_family = font_family
         logo_font = QFont()
         logo_font.setFamily(font_family)
-        safe_set_point_size(logo_font, FONT_SIZE_19)
+        safe_set_point_size(logo_font, FONT_SIZE_LARGE)
         logo_font.setBold(True)
         self._logo_lbl.setFont(logo_font)
         self._logo_lbl.setFixedHeight(_LOGO_SIZE_WORDMARK)
         self._logo_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
         self._logo_lbl.setStyleSheet(
-            f"font-family: '{font_family}', 'Bahnschrift SemiBold',"
-            f" 'Segoe UI Semibold', 'Segoe UI';"
-            f"font-size: {FONT_SIZE_19}px; font-weight: {FONT_WEIGHT_HEAVY}; color: {logo_color};"
-            f"background: transparent; letter-spacing: 1.{RADIUS_NONE}px; padding: 0; margin-left: {RADIUS_NONE}px; margin-top: {RADIUS_NONE}px;"
+            f"font-family: '{font_family}', 'Bahnschrift Condensed',"
+            f" 'Bahnschrift SemiBold', 'Segoe UI Semibold', 'Segoe UI';"
+            f"font-size: {FONT_SIZE_LARGE}px; font-weight: {FONT_WEIGHT_HEAVY}; color: {logo_color};"
+            f"background: transparent; letter-spacing: 0.8px; padding: 0; margin-left: {RADIUS_NONE}px; margin-top: {RADIUS_NONE}px;"
         )
         self._logo_lbl.setMaximumWidth(0)
         self._logo_lbl.setMinimumWidth(0)
@@ -671,10 +650,10 @@ class SidebarWidget(QWidget):
             )
 
         self._logo_lbl.setStyleSheet(
-            f"font-family: '{self._logo_font_family}', 'Bahnschrift SemiBold',"
-            f" 'Segoe UI Semibold', 'Segoe UI';"
-            f"font-size: {FONT_SIZE_19}px; font-weight: {FONT_WEIGHT_HEAVY}; color: {_TEXT_PRI};"
-            f"background: transparent; letter-spacing: 1.{RADIUS_NONE}px; padding: 0; margin-left: {RADIUS_NONE}px; margin-top: {RADIUS_NONE}px;"
+            f"font-family: '{self._logo_font_family}', 'Bahnschrift Condensed',"
+            f" 'Bahnschrift SemiBold', 'Segoe UI Semibold', 'Segoe UI';"
+            f"font-size: {FONT_SIZE_LARGE}px; font-weight: {FONT_WEIGHT_HEAVY}; color: {_TEXT_PRI};"
+            f"background: transparent; letter-spacing: 0.8px; padding: 0; margin-left: {RADIUS_NONE}px; margin-top: {RADIUS_NONE}px;"
         )
 
         self._acc_email.setStyleSheet(text_style(_TEXT_PRI, size=FONT_SIZE_CAPTION, extra="background: transparent;"))

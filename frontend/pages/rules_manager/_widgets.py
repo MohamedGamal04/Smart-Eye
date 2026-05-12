@@ -299,6 +299,7 @@ class _IdentityPicker(QWidget):
         self._combo.blockSignals(True)
         self._combo.clear()
         self._combo.addItem("\u2500 select identity \u2500", ("", ""))
+        self._combo.addItem("Unknown", ("unknown", "unknown"))
         for f in self._faces:
             name = (f.get("name", "") or "").strip()
             uuid = (f.get("external_uuid", "") or "").strip()
@@ -323,6 +324,9 @@ class _IdentityPicker(QWidget):
     def _on_uuid_mode_changed(self, checked: bool):
         self._uuid_btn.setText("UUID" if checked else "Name")
         preserve = self.get_value()
+        data = self._combo.currentData()
+        if isinstance(data, tuple):
+            preserve = (data[1] if checked else data[0]) or preserve
         self._rebuild_items(use_uuid=checked, preserve_value=preserve)
 
     def _seed(self, value: str):

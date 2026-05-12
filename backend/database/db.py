@@ -8,7 +8,10 @@ import sqlite3
 import threading
 import uuid
 import queue
+import time
 from datetime import datetime
+
+from utils.auth_validation import get_email_validation_error
 
 
 _write_lock = threading.RLock()
@@ -203,6 +206,55 @@ def _normalize_email(email: str) -> str:
     return (email or "").strip().lower()
 
 
+def is_bootstrap_admin_email(email: str) -> bool:
+    return _normalize_email(email) == _DEFAULT_ADMIN_EMAIL
+
+
+def get_bootstrap_admin_account():
+    row = _conn.execute("SELECT * FROM accounts WHERE email=?", (_DEFAULT_ADMIN_EMAIL,)).fetchone()
+    return _row_to_account(row) if row else None
+
+
+def reconcile_bootstrap_state() -> bool:
+    active = get_bool("bootstrap_password_active", False)
+    if not active:
+        return False
+    bootstrap_account = get_bootstrap_admin_account()
+    if bootstrap_account:
+        return True
+    _clear_bootstrap_token()
+    return False
+
+
+def bootstrap_password_change_required(account=None) -> bool:
+    if not reconcile_bootstrap_state():
+        return False
+    if account is None:
+        return True
+    email = account.get("email", "") if isinstance(account, dict) else str(account or "")
+    return is_bootstrap_admin_email(email)
+
+
+def _infer_setting_type(value) -> str:
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int) and not isinstance(value, bool):
+        return "int"
+    if isinstance(value, float):
+        return "float"
+    if isinstance(value, (list, tuple, dict)):
+        return "json"
+    return "string"
+
+
+def _serialize_setting_value(value, vtype: str) -> str:
+    if vtype == "bool":
+        return "1" if _as_bool(value, False) else "0"
+    if vtype == "json":
+        return json.dumps(value)
+    return "" if value is None else str(value)
+
+
 def _normalize_tabs(tabs):
     if not tabs:
         return []
@@ -294,6 +346,7 @@ def _row_to_account(row):
     return {
         "id": row["id"],
         "email": row["email"],
+        "username": row["username"] if "username" in row.keys() else "",
         "allowed_tabs": allowed,
         "is_admin": bool(row["is_admin"]),
         "created_at": row["created_at"],
@@ -330,7 +383,18 @@ def ensure_default_account():
         pass
 
 
-def create_account(email: str, password: str, allowed_tabs=None, is_admin: bool = False, security=None, avatar_path: str = ""):
+def create_account(
+    email: str,
+    password: str,
+    allowed_tabs=None,
+    is_admin: bool = False,
+    security=None,
+    avatar_path: str = "",
+    username: str = "",
+):
+    err = get_email_validation_error(email, allow_internal=True)
+    if err:
+        raise ValueError(err)
     sec_questions, sec_answers = security or ([], [])
     salt, pw_hash = _hash_password(password)
     sec_salt = secrets.token_hex(16)
@@ -345,11 +409,12 @@ def create_account(email: str, password: str, allowed_tabs=None, is_admin: bool 
     tabs = json.dumps(_normalize_tabs(allowed_tabs or []))
     cur = _write_execute(
         """INSERT INTO accounts
-        (email, password_hash, salt, allowed_tabs, is_admin,
+        (email, username, password_hash, salt, allowed_tabs, is_admin,
          sec_q1, sec_q2, sec_q3, sec_a1_hash, sec_a2_hash, sec_a3_hash, sec_salt, avatar_path)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             _normalize_email(email),
+            (username or "").strip(),
             pw_hash,
             salt,
             tabs,
@@ -367,13 +432,20 @@ def create_account(email: str, password: str, allowed_tabs=None, is_admin: bool 
     return cur.lastrowid
 
 
-def update_account(account_id: int, *, email=None, password=None, allowed_tabs=None, is_admin=None, security=None, avatar_path=None):
+def update_account(account_id: int, *, email=None, password=None, allowed_tabs=None, is_admin=None, security=None, avatar_path=None, username=None):
+    current = get_account(account_id)
     sets = []
     vals = []
     password_updated = False
     if email is not None:
+        err = get_email_validation_error(email, allow_internal=True)
+        if err:
+            raise ValueError(err)
         sets.append("email=?")
         vals.append(_normalize_email(email))
+    if username is not None:
+        sets.append("username=?")
+        vals.append((username or "").strip())
     if password is not None:
         salt, pw_hash = _hash_password(password)
         sets.append("password_hash=?")
@@ -407,12 +479,21 @@ def update_account(account_id: int, *, email=None, password=None, allowed_tabs=N
         return
     vals.append(account_id)
     _write_execute(f"UPDATE accounts SET {', '.join(sets)} WHERE id=?", vals)
-    if password_updated and get_bool("bootstrap_password_active", False):
+    current_email = current.get("email", "") if current else ""
+    updated_email = email if email is not None else current_email
+    if (
+        reconcile_bootstrap_state()
+        and (password_updated or updated_email != current_email)
+        and (is_bootstrap_admin_email(current_email) or is_bootstrap_admin_email(updated_email))
+    ):
         _clear_bootstrap_token()
 
 
 def delete_account(account_id: int):
+    account = get_account(account_id)
     _write_execute("DELETE FROM accounts WHERE id=?", (account_id,))
+    if account and is_bootstrap_admin_email(account.get("email", "")):
+        _clear_bootstrap_token()
 
 
 def get_accounts():
@@ -428,6 +509,11 @@ def get_account(account_id: int):
 def get_account_by_email(email: str):
     row = _conn.execute("SELECT * FROM accounts WHERE email=?", (_normalize_email(email),)).fetchone()
     return row
+
+
+def get_first_admin_account():
+    row = _conn.execute("SELECT * FROM accounts WHERE is_admin=1 ORDER BY id LIMIT 1").fetchone()
+    return _row_to_account(row) if row else None
 
 
 def verify_credentials(email: str, password: str):
@@ -464,6 +550,9 @@ def verify_security_answers(email: str, answers: list[str]):
 def set_password(account_id: int, new_password: str):
     salt, pw_hash = _hash_password(new_password)
     _write_execute("UPDATE accounts SET password_hash=?, salt=? WHERE id=?", (pw_hash, salt, account_id))
+    account = get_account(account_id)
+    if account and reconcile_bootstrap_state() and is_bootstrap_admin_email(account.get("email", "")):
+        _clear_bootstrap_token()
 
 
 def touch_last_login(account_id: int):
@@ -557,17 +646,6 @@ def get_camera_face_threshold(camera_id):
         return float(val)
     except Exception:
         return None
-
-
-def get_zones(camera_id=None, enabled_only=False):
-    q = "SELECT * FROM zones WHERE 1=1"
-    params = []
-    if camera_id is not None:
-        q += " AND camera_id=?"
-        params.append(camera_id)
-    if enabled_only:
-        q += " AND enabled=1"
-    return [dict(r) for r in _conn.execute(q, params).fetchall()]
 
 
 def add_plugin(name, model_type, weight_path, confidence=0.6, description="", version="1.0"):
@@ -762,10 +840,10 @@ def remove_camera_plugin_class(camera_id, plugin_class_id):
     )
 
 
-def add_rule(name, description, logic, action, priority=0, camera_id=None, zone_id=None):
+def add_rule(name, description, logic, action, priority=0, camera_id=None):
     cur = _write_execute(
-        "INSERT INTO rules (name, description, logic, action, priority, camera_id, zone_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (name, description, logic, action, priority, camera_id, zone_id),
+        "INSERT INTO rules (name, description, logic, action, priority, camera_id) VALUES (?, ?, ?, ?, ?, ?)",
+        (name, description, logic, action, priority, camera_id),
     )
     try:
         from backend.pipeline import rule_engine
@@ -785,7 +863,6 @@ def update_rule(rule_id, **kwargs):
         "enabled",
         "priority",
         "camera_id",
-        "zone_id",
     }
     sets, vals = _build_update(allowed, kwargs)
     if not sets:
@@ -896,6 +973,7 @@ def add_known_face(
     email="",
     embedding_model="",
     gender=None,
+    national_id="",
 ):
 
     try:
@@ -923,13 +1001,14 @@ def add_known_face(
     gender_norm = _normalize_gender_value(gender)
     cur = _write_execute(
         """INSERT INTO known_faces
-           (uuid, name, role, department, address, country, birth_date, phone, email, embedding, image_path, authorized_cameras, liveness_required, embedding_model, gender_norm)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           (uuid, name, role, department, national_id, address, country, birth_date, phone, email, embedding, image_path, authorized_cameras, liveness_required, embedding_model, gender_norm)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             row_uuid,
             name,
             role,
             department,
+            national_id,
             address,
             country,
             birth_date,
@@ -983,6 +1062,10 @@ def delete_face_inbox(entry_id: int):
 def update_known_face(face_id, **kwargs):
     if not kwargs:
         return
+    if "gender" in kwargs and "gender_norm" not in kwargs:
+        kwargs["gender_norm"] = _normalize_gender_value(kwargs.pop("gender"))
+    elif "gender_norm" in kwargs:
+        kwargs["gender_norm"] = _normalize_gender_value(kwargs.get("gender_norm"))
     allowed = {
         "uuid",
         "name",
@@ -990,6 +1073,7 @@ def update_known_face(face_id, **kwargs):
         "department",
         "address",
         "country",
+        "national_id",
         "birth_date",
         "phone",
         "email",
@@ -1021,12 +1105,19 @@ def get_known_faces(enabled_only=False):
     q = "SELECT * FROM known_faces"
     if enabled_only:
         q += " WHERE enabled=1"
-    return [dict(r) for r in _conn.execute(q).fetchall()]
+    rows = [dict(r) for r in _conn.execute(q).fetchall()]
+    for row in rows:
+        row["gender"] = _normalize_gender_value(row.get("gender") or row.get("gender_norm"))
+    return rows
 
 
 def get_known_face(face_id):
     row = _conn.execute("SELECT * FROM known_faces WHERE id=?", (face_id,)).fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    data = dict(row)
+    data["gender"] = _normalize_gender_value(data.get("gender") or data.get("gender_norm"))
+    return data
 
 
 def add_access_log(face_id, camera_id, decision, reason=""):
@@ -1062,7 +1153,7 @@ def _normalize_detections_payload(payload):
     return data
 
 
-def add_detection_log(camera_id, zone_id, identity, face_confidence, detections, rules_triggered, alarm_level, snapshot_path=""):
+def add_detection_log(camera_id, identity=None, face_confidence=0.0, detections=None, rules_triggered=None, alarm_level=0, snapshot_path=""):
     det_norm = _normalize_detections_payload(detections) if isinstance(detections, dict) else _normalize_detections_payload(detections)
     det_json = json.dumps(det_norm)
     rules_json = json.dumps(rules_triggered) if isinstance(rules_triggered, list) else rules_triggered
@@ -1071,7 +1162,7 @@ def add_detection_log(camera_id, zone_id, identity, face_confidence, detections,
     has_identity = 1 if ident_text and ident_text != "unknown" else 0
     cur = _write_execute(
         "INSERT INTO detection_logs (camera_id, zone_id, identity, face_confidence, detections, gender_norm, rules_triggered, alarm_level, snapshot_path, has_identity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (camera_id, zone_id, identity, face_confidence, det_json, gender_norm, rules_json, alarm_level, snapshot_path, has_identity),
+        (camera_id, None, identity, face_confidence, det_json, gender_norm, rules_json, alarm_level, snapshot_path, has_identity),
     )
     return cur.lastrowid
 
@@ -1218,18 +1309,18 @@ def set_setting(key, value):
     def _op(conn):
         row = conn.execute("SELECT type FROM app_settings WHERE key=?", (key,)).fetchone()
         if row:
-            vtype = row["type"]
-            if vtype == "bool":
-                v = "1" if value in (True, 1, "1", "true", "yes") else "0"
-            elif vtype == "json":
-                v = json.dumps(value)
-            else:
-                v = str(value)
-            conn.execute("UPDATE app_settings SET value=? WHERE key=?", (v, key))
-        else:
+            vtype = (row["type"] or "").strip().lower() or _infer_setting_type(value)
+            v = _serialize_setting_value(value, vtype)
             conn.execute(
-                "INSERT INTO app_settings (key, value) VALUES (?, ?)",
-                (key, str(value)),
+                "UPDATE app_settings SET value=?, type=CASE WHEN type IS NULL OR type='' THEN ? ELSE type END WHERE key=?",
+                (v, vtype, key),
+            )
+        else:
+            vtype = _infer_setting_type(value)
+            v = _serialize_setting_value(value, vtype)
+            conn.execute(
+                "INSERT INTO app_settings (key, value, type) VALUES (?, ?, ?)",
+                (key, v, vtype),
             )
         conn.commit()
 
@@ -1582,6 +1673,7 @@ def add_face(
     birth_date="",
     phone="",
     email="",
+    national_id="",
     embedding_model="",
     gender=None,
 ):
@@ -1599,6 +1691,7 @@ def add_face(
         birth_date=birth_date,
         phone=phone,
         email=email,
+        national_id=national_id,
         embedding_model=embedding_model,
         gender=gender,
     )
@@ -1633,22 +1726,41 @@ def get_db_path():
     return _DB_PATH
 
 
+def wait_for_writer_idle(timeout_sec: float = 5.0) -> bool:
+    deadline = time.time() + max(0.0, float(timeout_sec))
+    while time.time() < deadline:
+        pending = getattr(_write_queue, "unfinished_tasks", 0)
+        if pending <= 0:
+            return True
+        time.sleep(0.05)
+    return getattr(_write_queue, "unfinished_tasks", 0) <= 0
+
+
 def reset_database():
     schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
 
     _PRESERVE = {"app_settings", "accounts"}
 
     def _op(conn):
+        with contextlib.suppress(Exception):
+            conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA foreign_keys = OFF")
         conn.commit()
         tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()
         for t in tables:
             if t["name"] in _PRESERVE:
                 continue
-            try:
-                conn.execute(f"DELETE FROM [{t['name']}]")
-            except Exception:
-                pass
+            last_exc = None
+            for _ in range(3):
+                try:
+                    conn.execute(f"DELETE FROM [{t['name']}]")
+                    last_exc = None
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    time.sleep(0.05)
+            if last_exc is not None:
+                raise last_exc
         conn.commit()
         conn.execute("PRAGMA foreign_keys = ON")
         conn.commit()

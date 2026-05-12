@@ -22,7 +22,9 @@ from frontend.navigation import nav_keys, nav_label_map
 from frontend.widgets.confirm_delete_button import ConfirmDeleteButton
 from frontend.widgets.toggle_switch import ToggleSwitch
 from frontend.widgets.checkbox_style import CHECKBOX_STYLE
+from frontend.widgets.password_visibility import attach_password_visibility_toggle
 from frontend.styles._colors import _BG_CHECK, _BG_NAV_ALT, _BG_NAV_DARK, _TEXT_PRI, _TEXT_SEC
+from utils.auth_validation import get_email_validation_error
 from frontend.ui_tokens import (
     FONT_SIZE_BODY,
     FONT_SIZE_CAPTION,
@@ -90,15 +92,21 @@ class AccountsTab(QWidget):
         self._email_input.setPlaceholderText("user@example.com")
         self._email_input.setFixedHeight(_FIELD_H)
 
+        self._username_input = QLineEdit()
+        self._username_input.setPlaceholderText("Optional")
+        self._username_input.setFixedHeight(_FIELD_H)
+
         self._password_input = QLineEdit()
         self._password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self._password_input.setPlaceholderText("Set a password")
         self._password_input.setFixedHeight(_FIELD_H)
+        attach_password_visibility_toggle(self._password_input)
 
         self._confirm_input = QLineEdit()
         self._confirm_input.setEchoMode(QLineEdit.EchoMode.Password)
         self._confirm_input.setPlaceholderText("Confirm password")
         self._confirm_input.setFixedHeight(_FIELD_H)
+        attach_password_visibility_toggle(self._confirm_input)
 
         self._admin_toggle = ToggleSwitch()
         self._avatar_path = QLineEdit()
@@ -112,6 +120,7 @@ class AccountsTab(QWidget):
         avatar_row.addWidget(avatar_btn)
 
         bl.addWidget(_srow("Email", self._email_input))
+        bl.addWidget(_srow("Username", self._username_input))
         bl.addWidget(_srow("Password", self._password_input, hint="Required for new accounts. Leave blank to keep current password."))
         bl.addWidget(_srow("Confirm", self._confirm_input))
         bl.addWidget(_srow("Administrator", self._admin_toggle, hint="Admins can open every tab regardless of restrictions."))
@@ -123,6 +132,7 @@ class AccountsTab(QWidget):
         self._q1.setPlaceholderText("What is your pet's name?")
         self._a1 = QLineEdit()
         self._a1.setEchoMode(QLineEdit.EchoMode.Password)
+        attach_password_visibility_toggle(self._a1)
         bl.addWidget(_srow("Question 1", self._q1))
         bl.addWidget(_srow("Answer 1", self._a1))
 
@@ -130,6 +140,7 @@ class AccountsTab(QWidget):
         self._q2.setPlaceholderText("In what city were you born?")
         self._a2 = QLineEdit()
         self._a2.setEchoMode(QLineEdit.EchoMode.Password)
+        attach_password_visibility_toggle(self._a2)
         bl.addWidget(_srow("Question 2", self._q2))
         bl.addWidget(_srow("Answer 2", self._a2))
 
@@ -137,6 +148,7 @@ class AccountsTab(QWidget):
         self._q3.setPlaceholderText("What is your favorite color?")
         self._a3 = QLineEdit()
         self._a3.setEchoMode(QLineEdit.EchoMode.Password)
+        attach_password_visibility_toggle(self._a3)
         bl.addWidget(_srow("Question 3", self._q3))
         bl.addWidget(_srow("Answer 3", self._a3))
 
@@ -203,6 +215,7 @@ class AccountsTab(QWidget):
         self._editing_id = None
         self._editing_account = None
         self._email_input.clear()
+        self._username_input.clear()
         self._password_input.clear()
         self._confirm_input.clear()
         self._admin_toggle.setChecked(False)
@@ -228,13 +241,15 @@ class AccountsTab(QWidget):
     def _handle_save(self):
         was_bootstrap = db.get_bool("bootstrap_password_active", False)
         email = self._email_input.text().strip()
+        username = self._username_input.text().strip()
         password = self._password_input.text()
         confirm = self._confirm_input.text()
         tabs = self._collect_tabs()
         is_admin = self._admin_toggle.isChecked()
         is_new = self._editing_id is None
-        if not email:
-            self._status_lbl.setText("Email is required.")
+        email_error = get_email_validation_error(email, allow_internal=True)
+        if email_error:
+            self._status_lbl.setText(email_error)
             return
         if is_new and not password:
             self._status_lbl.setText("Password is required for new accounts.")
@@ -265,12 +280,21 @@ class AccountsTab(QWidget):
         avatar_path = self._avatar_path.text().strip()
         try:
             if is_new:
-                db.create_account(email, password, tabs, is_admin=is_admin, security=(questions, answers), avatar_path=avatar_path)
+                db.create_account(
+                    email,
+                    password,
+                    tabs,
+                    is_admin=is_admin,
+                    security=(questions, answers),
+                    avatar_path=avatar_path,
+                    username=username,
+                )
                 self._status_lbl.setText("Account created.")
             else:
                 db.update_account(
                     self._editing_id,
                     email=email,
+                    username=username,
                     password=password or None,
                     allowed_tabs=tabs,
                     is_admin=is_admin,
@@ -329,6 +353,14 @@ class AccountsTab(QWidget):
             f"QLabel {{ color: {_TEXT_PRI}; font-weight: {FONT_WEIGHT_SEMIBOLD}; font-size: {FONT_SIZE_BODY}px; background: transparent; border: none; }}"
         )
         info_col.addWidget(email_lbl)
+
+        username = (acc.get("username") or "").strip()
+        if username:
+            username_lbl = QLabel(f"@{username}")
+            username_lbl.setStyleSheet(
+                f"QLabel {{ color: {_TEXT_SEC}; font-size: {FONT_SIZE_CAPTION}px; background: transparent; border: none; }}"
+            )
+            info_col.addWidget(username_lbl)
 
         role = "Administrator" if acc.get("is_admin") else "Limited"
         role_lbl = QLabel(role)
@@ -407,6 +439,7 @@ class AccountsTab(QWidget):
         self._editing_id = acc.get("id")
         self._editing_account = acc
         self._email_input.setText(acc.get("email", ""))
+        self._username_input.setText(acc.get("username", "") or "")
         self._password_input.clear()
         self._confirm_input.clear()
         self._admin_toggle.setChecked(bool(acc.get("is_admin")))

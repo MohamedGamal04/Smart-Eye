@@ -47,6 +47,36 @@ jobs:
           pip install --upgrade setuptools
           pip show setuptools
 
+      - name: Collect PySide6 plugins
+        shell: pwsh
+        run: |
+          $p = (python -c "import PySide6, os; print(os.path.join(os.path.dirname(PySide6.__file__), 'plugins'))").Trim()
+          if (Test-Path $p) {
+            Write-Host "Copying PySide6 plugins from $p"
+            Remove-Item -Path "$PWD\frontend\pyside6_plugins" -Recurse -Force -ErrorAction SilentlyContinue
+            Copy-Item -Path $p -Destination "$PWD\frontend\pyside6_plugins" -Recurse -Force
+            Write-Host "PySide6 plugins copied to frontend/pyside6_plugins"
+          } else {
+            Write-Host "PySide6 plugins path not found: $p"
+          }
+
+      - name: Download model bundle (optional)
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "data/models")) {
+            if ($env:MODEL_BUNDLE_URL) {
+              Write-Host "MODEL_BUNDLE_URL set — downloading model bundle..."
+              Invoke-WebRequest -Uri $env:MODEL_BUNDLE_URL -OutFile models.zip -UseBasicParsing
+              Expand-Archive models.zip -DestinationPath data/models
+              Remove-Item models.zip -Force
+              Write-Host "Model bundle downloaded and extracted to data/models"
+            } else {
+              Write-Host "MODEL_BUNDLE_URL not set; skipping model download"
+            }
+          } else {
+            Write-Host "data/models already exists — skipping download"
+          }
+
       - name: Cache Nuitka build cache
         uses: actions/cache@v4
         with:
@@ -55,12 +85,55 @@ jobs:
           restore-keys: |
             nuitka-${{ runner.os }}-
 
+      - name: Stage scientific runtime libs for packaging
+        shell: pwsh
+        run: |
+          @'
+          import importlib.util
+          import pathlib
+          import shutil
+
+          root = pathlib.Path(".").resolve()
+          out_root = root / "build_assets"
+          out_root.mkdir(exist_ok=True)
+
+          def stage_lib_dir(pkg_name: str):
+              spec = importlib.util.find_spec(pkg_name)
+              if not spec or not spec.origin:
+                  print(f"[warn] could not resolve {pkg_name}")
+                  return
+              pkg_dir = pathlib.Path(spec.origin).resolve().parent
+              libs_dir = pkg_dir.parent / f"{pkg_name}.libs"
+              if not libs_dir.exists():
+                  print(f"[info] no {pkg_name}.libs at {libs_dir}")
+                  return
+              dst = out_root / f"{pkg_name}.libs"
+              if dst.exists():
+                  shutil.rmtree(dst)
+              shutil.copytree(libs_dir, dst)
+              print(f"[ok] staged {libs_dir} -> {dst}")
+
+          stage_lib_dir("scipy")
+          stage_lib_dir("numpy")
+          '@ | python -
+
+          Get-ChildItem -Path "$PWD\build_assets" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "Staged runtime dir: $($_.FullName)"
+          }
+
       - name: Check for model bundle
         id: check_models
         shell: pwsh
         run: |
           $hasModels = (Get-ChildItem -Path "data/models" -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0
           "has_models=$($hasModels.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Check for object model file
+        id: check_obj
+        shell: pwsh
+        run: |
+          $hasObj = Test-Path "data/models/Obj-Detection.onnx"
+          "has_obj=$($hasObj.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Build with Nuitka
         uses: Nuitka/Nuitka-Action@main
@@ -70,9 +143,10 @@ jobs:
           mode: standalone
           output-dir: build
           output-file: SmartEye
-          jobs: "4"
+          jobs: "2"
           lto: "yes"
           windows-console-mode: disable
+          windows-icon-from-ico: frontend/assets/icons/icon.ico
           enable-plugins: pyside6
           show-scons: true
           include-package: |
@@ -91,22 +165,42 @@ jobs:
             frontend
             utils
             streamlink
+            numpy
+            scipy
+            skimage
+            albumentations
+          include-module: |
+            scipy._cyutility
+            scipy._lib._ccallback_c
           include-package-data: |
             reportlab
             pyqtgraph
             insightface
             onnxruntime
             streamlink
+            numpy
+            scipy
+            skimage
+            albumentations
           include-data-dir: |
             frontend/assets=frontend/assets
-            ${{ steps.check_models.outputs.has_models == 'true' && 'data/models=data/models' || '' }}
+            frontend/pyside6_plugins=PySide6/plugins
+            build_assets/scipy.libs=scipy.libs
+            build_assets/numpy.libs=numpy.libs
           include-data-files: |
             app_info.json=app_info.json
             backend/database/schema.sql=backend/database/schema.sql
+            ${{ steps.check_obj.outputs.has_obj == 'true' && 'data/models/Obj-Detection.onnx=data/models/Obj-Detection.onnx' || '' }}
           nofollow-import-to: |
             numpy.distutils
             numpy.random.tests
             numpy.random.tests.test_extending
+            scipy.tests
+            scipy.stats.tests
+            scipy.stats.tests.test_censored_data
+            scipy.stats.tests.test_continuous
+            sympy.polys.polyquinticconst
+            trio.testing
             onnxruntime.training
             onnxruntime.tools
             onnx.backend.test

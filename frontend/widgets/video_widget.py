@@ -50,7 +50,6 @@ class VideoWidget(QLabel):
         self.setStyleSheet("background-color: {}; border-radius: {}px;".format(_BLACK, RADIUS_LG))
         self._state = {}
         self._show_overlays = True
-        self._zones = []
         self._last_frame = None
         self._frame_w = 1
         self._frame_h = 1
@@ -62,19 +61,16 @@ class VideoWidget(QLabel):
         if frame is None:
             return
         self._last_frame = frame
-        rgb = frame
-        if len(frame.shape) == 3 and frame.shape[2] == 3:
-            import cv2
-
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        h, w, ch = rgb.shape
+        if len(frame.shape) != 3 or frame.shape[2] != 3:
+            return
+        h, w, ch = frame.shape
         self._frame_w, self._frame_h = w, h
-        qimg = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
+        qimg = QImage(frame.data, w, h, ch * w, QImage.Format.Format_BGR888)
         pixmap = QPixmap.fromImage(qimg)
 
         viewport_px = max(1, self.width() * self.height())
         frame_px = max(1, w * h)
-        use_fast = frame_px > viewport_px * 1.5 or frame_px >= 1280 * 720
+        use_fast = frame_px > viewport_px * 1.2 or frame_px >= 960 * 540
         scaled = pixmap.scaled(
             self.size(),
             Qt.AspectRatioMode.KeepAspectRatio,
@@ -191,9 +187,6 @@ class VideoWidget(QLabel):
 
     def set_fps(self, fps: float):
         self._fps = fps
-
-    def set_zones(self, zones):
-        self._zones = zones
 
     def set_show_overlays(self, show):
         self._show_overlays = show

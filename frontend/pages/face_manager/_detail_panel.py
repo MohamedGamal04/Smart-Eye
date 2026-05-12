@@ -33,7 +33,6 @@ from frontend.ui_tokens import (
 )
 from ._constants import (
     _ACCENT_HI,
-    _PRIMARY_BTN,
     _TEXT_BTN_BLUE,
     _TEXT_MUTED,
     _TEXT_PRI,
@@ -215,6 +214,7 @@ class DetailPanel(QWidget):
         for k, hint in self._section_hint_labels.items():
             hint.setVisible(enabled)
         for key, edit in self._inputs.items():
+            edit.setEnabled(enabled)
             edit.setVisible(False)
             vw = self._value_labels.get(key)
             if vw:
@@ -222,7 +222,7 @@ class DetailPanel(QWidget):
         if hasattr(self, "_edit_btn"):
             if enabled:
                 self._edit_btn.setText("Save")
-                self._edit_btn.setStyleSheet(_PRIMARY_BTN)
+                self._edit_btn.setStyleSheet(_TEXT_BTN_BLUE)
             else:
                 self._edit_btn.setText("Edit")
                 self._edit_btn.setStyleSheet(_TEXT_BTN_BLUE)
@@ -269,6 +269,15 @@ class DetailPanel(QWidget):
             self._inputs["third_name"].text().strip(),
             self._inputs["last_name"].text().strip(),
         )
+
+        gender_widget = self._inputs.get("gender")
+        gender_value = "unknown"
+        if gender_widget is not None:
+            if hasattr(gender_widget, "currentText"):
+                gender_value = gender_widget.currentText().strip().lower() or "unknown"
+            else:
+                gender_value = gender_widget.text().strip().lower() or "unknown"
+
         is_authorized = self._inputs["authorized"].isChecked()
         updates = {
             "name": full_name,
@@ -276,6 +285,7 @@ class DetailPanel(QWidget):
             "address": self._inputs["address"].text().strip(),
             "country": self._inputs["country"].text().strip(),
             "birth_date": self._inputs["birth_date"].text().strip(),
+            "gender": gender_value,
             "phone": self._inputs["phone"].text().strip(),
             "email": self._inputs["email"].text().strip(),
             "authorized_cameras": "all" if is_authorized else "[]",

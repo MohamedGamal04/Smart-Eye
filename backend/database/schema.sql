@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS known_faces (
     name            TEXT NOT NULL,
     role            TEXT,
     department      TEXT,
+    national_id     TEXT,
     address         TEXT,
     country         TEXT,
     birth_date      TEXT,
@@ -180,6 +181,7 @@ CREATE TABLE IF NOT EXISTS clips (
 CREATE TABLE IF NOT EXISTS accounts (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     email         TEXT NOT NULL UNIQUE,
+    username      TEXT,
     password_hash TEXT NOT NULL,
     salt          TEXT NOT NULL,
     allowed_tabs  TEXT NOT NULL DEFAULT '[]',
@@ -201,6 +203,7 @@ INSERT OR IGNORE INTO app_settings VALUES ('gpu_enabled', '1', 'bool', 'Use GPU'
 INSERT OR IGNORE INTO app_settings VALUES ('max_cameras', '4', 'int', 'Max Simultaneous Cameras', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('snapshot_on_alarm', '1', 'bool', 'Save Snapshot on Alarm', 'detection');
 INSERT OR IGNORE INTO app_settings VALUES ('face_similarity_threshold', '0.45', 'float', 'Face Match Threshold', 'detection');
+INSERT OR IGNORE INTO app_settings VALUES ('face_recognition_enabled_global', '1', 'bool', 'Enable Face Recognition', 'detection');
 INSERT OR IGNORE INTO app_settings VALUES ('liveness_check_global', '0', 'bool', 'Require Liveness Globally', 'detection');
 INSERT OR IGNORE INTO app_settings VALUES ('log_retention_days', '90', 'int', 'Log Retention (days)', 'data');
 INSERT OR IGNORE INTO app_settings VALUES ('db_size_limit_bytes', '0', 'int', 'DB Size Limit (bytes)', 'data');
@@ -217,6 +220,8 @@ INSERT OR IGNORE INTO app_settings VALUES ('insightface_model_dir', '', 'string'
 INSERT OR IGNORE INTO app_settings VALUES ('insightface_root_cache', '', 'string', 'InsightFace Root Cache', 'detection');
 INSERT OR IGNORE INTO app_settings VALUES ('insightface_allowed_modules', '["detection","recognition"]', 'json', 'Allowed InsightFace Modules', 'detection');
 INSERT OR IGNORE INTO app_settings VALUES ('limit_resources', '0', 'bool', 'Limit Resource Usage', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('max_cpu_cores', '2', 'int', 'Max CPU Cores', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('max_ram_mb', '4096', 'int', 'Max RAM (MB)', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('ui_pause_inactive_tabs', '1', 'bool', 'Pause inactive tabs', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('ui_unload_on_leave', '1', 'bool', 'Unload heavy tabs on leave', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('ui_unload_idle_min', '5', 'int', 'Unload idle tabs after (min)', 'performance');

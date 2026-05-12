@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -19,12 +20,12 @@ from PySide6.QtWidgets import (
 )
 
 from backend.repository import db
+from frontend.app_theme import safe_set_point_size
 from frontend.services.rules_service import RulesService
 from frontend.widgets.confirm_delete_button import ConfirmDeleteButton
 from frontend.widgets.toggle_switch import ToggleSwitch
-from frontend.styles._colors import _SUCCESS_BG_10, _SUCCESS_BG_20
+from frontend.widgets.action_feedback import make_manager_footer_layout
 from frontend.styles._banner_styles import make_edit_banner
-from frontend.styles._btn_styles import _SECONDARY_BTN
 from ._widgets import build_rule_header
 from frontend.styles._input_styles import _FORM_INPUT_TITLE, _FORM_INPUTS
 from frontend.ui_tokens import (
@@ -36,6 +37,7 @@ from frontend.ui_tokens import (
     FONT_WEIGHT_NORMAL,
     RADIUS_3,
     RADIUS_5,
+    SIZE_BTN_W_80,
     SIZE_BTN_W_MD,
     SIZE_BTN_W_SM,
     SIZE_CONTROL_MD,
@@ -58,11 +60,14 @@ from frontend.ui_tokens import (
 
 from ._constants import (
     _ADD_BTN_BLUE,
+    _BG_RAISED,
     _BG_SURFACE,
     _BORDER,
     _BORDER_DIM,
     _PRIMARY_BTN,
-    _SUCCESS,
+    _TEXT_PRI,
+    _TEXT_BTN_BLUE,
+    _TEXT_BTN_GHOST,
     _TEXT_BTN_RED,
     _TEXT_BTN_RED_CONFIRM,
     _TEXT_MUTED,
@@ -185,13 +190,6 @@ class _BaseRuleForm(QWidget):
             self._e_camera.addItem(cam["name"], cam["id"])
         self._e_camera.setStyleSheet(_combo_ss())
         body_l.addWidget(_srow("Camera", self._e_camera))
-
-        self._e_zone = QComboBox()
-        self._e_zone.addItem("Whole Frame", None)
-        for z in db.get_zones():
-            self._e_zone.addItem(z["name"], z["id"])
-        self._e_zone.setStyleSheet(_combo_ss())
-        body_l.addWidget(_srow("Zone", self._e_zone))
 
         self._e_priority = QSpinBox()
         self._e_priority.setRange(0, 100)
@@ -357,30 +355,29 @@ class _EditRuleForm(_BaseRuleForm):
         self._build_alarms_section(body_l)
 
     def _make_action_bar(self) -> QHBoxLayout:
-        ab = QHBoxLayout()
-        ab.setContentsMargins(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD)
-        ab.setSpacing(SPACE_SM)
         del_btn = ConfirmDeleteButton("Delete", "Sure?")
         del_btn.setFixedHeight(SIZE_CONTROL_MD)
         del_btn.setFixedWidth(SIZE_BTN_W_MD)
         del_btn.set_button_styles(_TEXT_BTN_RED, _TEXT_BTN_RED_CONFIRM)
         del_btn.set_confirm_callback(lambda: self.delete_requested.emit())
-        ab.addWidget(del_btn)
-        ab.addStretch()
 
         cancel = QPushButton("Cancel")
         cancel.setFixedHeight(SIZE_CONTROL_MD)
-        cancel.setFixedWidth(SIZE_BTN_W_SM)
-        cancel.setStyleSheet(_SECONDARY_BTN)
+        cancel.setFixedWidth(SIZE_BTN_W_80)
+        cancel.setStyleSheet(_TEXT_BTN_GHOST)
         cancel.clicked.connect(lambda: self.cancel_requested.emit())
-        ab.addWidget(cancel)
 
         save = QPushButton("Save")
         save.setFixedHeight(SIZE_CONTROL_MD)
-        save.setStyleSheet(_PRIMARY_BTN)
+        save.setFixedWidth(SIZE_BTN_W_80)
+        save.setStyleSheet(_TEXT_BTN_BLUE)
         save.clicked.connect(self._do_save)
-        ab.addWidget(save)
-        return ab
+        return make_manager_footer_layout(
+            left_widget=del_btn,
+            right_widgets=[cancel, save],
+            margins=(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD),
+            spacing=SPACE_SM,
+        )
 
     def _seed_from_rule(self, rule: dict):
         self._e_name.setText(rule.get("name", ""))
@@ -395,11 +392,6 @@ class _EditRuleForm(_BaseRuleForm):
             for i in range(self._e_camera.count()):
                 if self._e_camera.itemData(i) == rule["camera_id"]:
                     self._e_camera.setCurrentIndex(i)
-                    break
-        if rule.get("zone_id"):
-            for i in range(self._e_zone.count()):
-                if self._e_zone.itemData(i) == rule["zone_id"]:
-                    self._e_zone.setCurrentIndex(i)
                     break
 
         for c in self._rules_service.get_rule_conditions(self._rule_id):
@@ -424,7 +416,6 @@ class _EditRuleForm(_BaseRuleForm):
                 action=self._e_action.currentText(),
                 priority=self._e_priority.value(),
                 camera_id=self._e_camera.currentData(),
-                zone_id=self._e_zone.currentData(),
                 enabled=self._e_enabled.isChecked(),
             ),
             conditions=self._collect_conditions(),
@@ -443,23 +434,23 @@ class NewRulePanel(_BaseRuleForm):
 
     def _make_banner(self) -> QWidget:
         banner = QFrame()
-        banner.setStyleSheet(f"""
-            QFrame {{
-                background:{_SUCCESS_BG_10};
-                border-bottom:{SPACE_XXXS}px solid {_SUCCESS_BG_20};
-                border-top:none;border-left:none;border-right:none;
-            }}
-        """)
+        banner.setStyleSheet(f"QFrame{{background:{_BG_RAISED};border:none;}}")
         bi = QHBoxLayout(banner)
-        bi.setContentsMargins(SPACE_XL, SPACE_SM, SPACE_XL, SPACE_SM)
+        bi.setContentsMargins(SPACE_20, SPACE_14, SPACE_20, SPACE_14)
         bi.setSpacing(SPACE_SM)
-        dot = QLabel("\u25cf")
-        dot.setStyleSheet(f"color:{_SUCCESS};font-size:{FONT_SIZE_7}px;background:transparent;")
-        bi.addWidget(dot)
-        lbl = QLabel("New Rule \u2014 fill in the details and click Save")
-        lbl.setStyleSheet(f"color:{_SUCCESS};font-size:{FONT_SIZE_CAPTION}px;background:transparent;")
+        nf = QFont()
+        safe_set_point_size(nf, FONT_SIZE_CAPTION)
+        nf.setBold(True)
+        lbl = QLabel("Add Rule")
+        lbl.setFont(nf)
+        lbl.setStyleSheet(f"color:{_TEXT_PRI};")
         bi.addWidget(lbl)
         bi.addStretch()
+        close_x = QPushButton("✕")
+        close_x.setFixedSize(SIZE_CONTROL_MD, SIZE_CONTROL_MD)
+        close_x.setStyleSheet(_TEXT_BTN_GHOST)
+        close_x.clicked.connect(lambda: self.close_requested.emit())
+        bi.addWidget(close_x)
         return banner
 
     def _populate_body(self, body_l: QVBoxLayout):
@@ -473,22 +464,21 @@ class NewRulePanel(_BaseRuleForm):
         self._e_enabled.setChecked(True)
 
     def _make_action_bar(self) -> QHBoxLayout:
-        ab = QHBoxLayout()
-        ab.setContentsMargins(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD)
-        ab.setSpacing(SPACE_SM)
-        ab.addStretch()
         close = QPushButton("Close")
         close.setFixedHeight(SIZE_CONTROL_MD)
-        close.setFixedWidth(SIZE_BTN_W_SM)
-        close.setStyleSheet(_SECONDARY_BTN)
+        close.setFixedWidth(SIZE_BTN_W_80)
+        close.setStyleSheet(_TEXT_BTN_GHOST)
         close.clicked.connect(lambda: self.close_requested.emit())
-        ab.addWidget(close)
         save = QPushButton("Save")
         save.setFixedHeight(SIZE_CONTROL_MD)
-        save.setStyleSheet(_PRIMARY_BTN)
+        save.setFixedWidth(SIZE_BTN_W_80)
+        save.setStyleSheet(_TEXT_BTN_BLUE)
         save.clicked.connect(self._do_save)
-        ab.addWidget(save)
-        return ab
+        return make_manager_footer_layout(
+            right_widgets=[close, save],
+            margins=(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD),
+            spacing=SPACE_SM,
+        )
 
     def reset(self):
         self._alarm_cards.clear()
@@ -499,7 +489,6 @@ class NewRulePanel(_BaseRuleForm):
         self._e_action.setCurrentText("log_only")
         self._e_priority.setValue(0)
         self._e_camera.setCurrentIndex(0)
-        self._e_zone.setCurrentIndex(0)
         self._e_enabled.setChecked(True)
         if self._cond_vbox:
             while self._cond_vbox.count():
@@ -534,7 +523,6 @@ class NewRulePanel(_BaseRuleForm):
                 action=self._e_action.currentText(),
                 priority=self._e_priority.value(),
                 camera_id=self._e_camera.currentData(),
-                zone_id=self._e_zone.currentData(),
                 enabled=self._e_enabled.isChecked(),
             ),
             conditions=self._collect_conditions(),

@@ -30,6 +30,7 @@ from frontend.app_theme import safe_set_point_size
 from frontend.icon_theme import themed_icon_pixmap
 from frontend.dialogs import apply_popup_theme
 from frontend.widgets.confirm_delete_button import ConfirmDeleteButton
+from frontend.widgets.action_feedback import make_manager_footer_layout
 from frontend.widgets.toggle_switch import ToggleSwitch
 from frontend.styles._colors import (
     _ACCENT,
@@ -419,7 +420,7 @@ class CameraDetailPanel(QWidget):
             bl.addWidget(_div())
 
         bl.addSpacing(SPACE_10)
-        bl.addWidget(_section("Detection"))
+        bl.addWidget(_section("Face Recognition"))
         face_thresh = cam.get("face_similarity_threshold")
         if face_thresh is None:
             try:
@@ -436,16 +437,23 @@ class CameraDetailPanel(QWidget):
                 max_faces = db.get_setting("max_faces_per_frame", 16) or 16
         except (sqlite3.Error, OSError, ValueError):
             max_faces = 16
+        try:
+            min_face_size = db.get_setting(f"camera_{cam['id']}_min_face_size", None)
+            if min_face_size is None:
+                min_face_size = db.get_setting("min_face_size", 40) or 40
+        except (sqlite3.Error, OSError, ValueError):
+            min_face_size = 40
         for lbl, val in [
             ("Face Recognition", "Enabled" if face_on else "Disabled"),
             ("Match Threshold", thresh_display),
             ("Max Faces / Frame", str(int(max_faces))),
+            ("Min Face Size", f"{int(min_face_size)} px"),
         ]:
             bl.addWidget(_info_row(lbl, val))
             bl.addWidget(_div())
 
         bl.addSpacing(SPACE_10)
-        bl.addWidget(_section("Detection Plugins"))
+        bl.addWidget(_section("Plugins"))
         try:
             assigned = db.get_camera_plugins(cam["id"])
         except (sqlite3.Error, OSError, ValueError):
@@ -474,10 +482,6 @@ class CameraDetailPanel(QWidget):
         sep.setStyleSheet(_SEPARATOR_STYLE)
         lay.addWidget(sep)
 
-        ab = QHBoxLayout()
-        ab.setContentsMargins(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD)
-        ab.setSpacing(SPACE_SM)
-
         del_btn = ConfirmDeleteButton("Delete", "Sure?")
         del_btn.setFixedHeight(SIZE_CONTROL_MD)
         del_btn.setFixedWidth(SIZE_BTN_W_MD)
@@ -491,24 +495,26 @@ class CameraDetailPanel(QWidget):
             self.delete_requested.emit(self._cam_id)
 
         del_btn.set_confirm_callback(_do_delete)
-        ab.addWidget(del_btn)
-        ab.addStretch()
 
         close_btn = QPushButton("Close")
         close_btn.setFixedHeight(SIZE_CONTROL_MD)
         close_btn.setFixedWidth(SIZE_BTN_W_80)
         close_btn.setStyleSheet(_TEXT_BTN_GHOST)
         close_btn.clicked.connect(lambda: self.close_requested.emit())
-        ab.addWidget(close_btn)
 
         edit_btn = QPushButton("Edit")
         edit_btn.setFixedHeight(SIZE_CONTROL_MD)
         edit_btn.setFixedWidth(SIZE_BTN_W_80)
         edit_btn.setStyleSheet(_TEXT_BTN_BLUE)
         edit_btn.clicked.connect(self._open_edit)
-        ab.addWidget(edit_btn)
-
-        lay.addLayout(ab)
+        lay.addLayout(
+            make_manager_footer_layout(
+                left_widget=del_btn,
+                right_widgets=[close_btn, edit_btn],
+                margins=(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD),
+                spacing=SPACE_SM,
+            )
+        )
 
     def _make_hero(self, cam: dict, enabled: bool, face_on: bool) -> QFrame:
         hero = QFrame()
@@ -711,7 +717,7 @@ class CameraDetailPanel(QWidget):
         body_l.addWidget(_srow("Enabled", _left(enabled_toggle)))
 
         body_l.addSpacing(SPACE_XS)
-        body_l.addWidget(_make_sdiv("Detection"))
+        body_l.addWidget(_make_sdiv("Face Recognition"))
 
         try:
             raw_thresh = cam.get("face_similarity_threshold")
@@ -741,12 +747,25 @@ class CameraDetailPanel(QWidget):
         max_faces_spin.setStyleSheet(_spin_ss())
         body_l.addWidget(_srow("Max Faces / Frame", max_faces_spin))
 
+        try:
+            cur_min_face = db.get_setting(f"camera_{cam_id}_min_face_size", None)
+            if cur_min_face is None:
+                cur_min_face = db.get_setting("min_face_size", 40) or 40
+        except (sqlite3.Error, OSError, ValueError):
+            cur_min_face = 40
+        min_face_size_spin = QSpinBox()
+        min_face_size_spin.setRange(10, 500)
+        min_face_size_spin.setValue(int(cur_min_face))
+        min_face_size_spin.setSuffix(" px")
+        min_face_size_spin.setStyleSheet(_spin_ss())
+        body_l.addWidget(_srow("Min Face Size", min_face_size_spin))
+
         face_toggle = ToggleSwitch()
         face_toggle.setChecked(bool(cam.get("face_recognition")))
         body_l.addWidget(_srow("Face Recognition", _left(face_toggle)))
 
         body_l.addSpacing(SPACE_XS)
-        body_l.addWidget(_make_sdiv("Detection Plugins"))
+        body_l.addWidget(_make_sdiv("Plugins"))
 
         try:
             all_plugins = db.get_plugins()
@@ -999,10 +1018,6 @@ class CameraDetailPanel(QWidget):
         sep.setStyleSheet(_SEPARATOR_STYLE)
         lay.addWidget(sep)
 
-        ab = QHBoxLayout()
-        ab.setContentsMargins(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD)
-        ab.setSpacing(SPACE_SM)
-
         del_btn_edit = ConfirmDeleteButton("Delete", "Sure?")
         del_btn_edit.setFixedHeight(SIZE_CONTROL_MD)
         del_btn_edit.setFixedWidth(SIZE_BTN_W_MD)
@@ -1016,20 +1031,17 @@ class CameraDetailPanel(QWidget):
             self.delete_requested.emit(self._cam_id)
 
         del_btn_edit.set_confirm_callback(_do_delete_edit)
-        ab.addWidget(del_btn_edit)
-        ab.addStretch()
 
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setFixedHeight(SIZE_CONTROL_MD)
-        cancel_btn.setFixedWidth(SIZE_BTN_W_84)
+        cancel_btn.setFixedWidth(SIZE_BTN_W_80)
         cancel_btn.setStyleSheet(_TEXT_BTN_GHOST)
         cancel_btn.clicked.connect(lambda: self.load_camera(db.get_camera(cam_id) or cam))
-        ab.addWidget(cancel_btn)
 
-        save_btn = QPushButton("Save Changes")
+        save_btn = QPushButton("Save")
         save_btn.setFixedHeight(SIZE_CONTROL_MD)
-
-        save_btn.setStyleSheet(_PRIMARY_BTN)
+        save_btn.setFixedWidth(SIZE_BTN_W_80)
+        save_btn.setStyleSheet(_TEXT_BTN_BLUE)
 
         def _do_save():
             name = e_name.text().strip()
@@ -1057,6 +1069,10 @@ class CameraDetailPanel(QWidget):
                 db.set_setting(f"camera_{cam_id}_max_faces", int(max_faces_spin.value()))
             except (sqlite3.Error, OSError, ValueError):
                 logger.warning("Failed to persist max faces setting for camera id=%s", cam_id, exc_info=True)
+            try:
+                db.set_setting(f"camera_{cam_id}_min_face_size", int(min_face_size_spin.value()))
+            except (sqlite3.Error, OSError, ValueError):
+                logger.warning("Failed to persist min face size setting for camera id=%s", cam_id, exc_info=True)
             for pid, cb in plugin_checks.items():
                 try:
                     if cb.isChecked():
@@ -1065,6 +1081,10 @@ class CameraDetailPanel(QWidget):
                         db.unassign_plugin_from_camera(cam_id, pid)
                 except (sqlite3.Error, OSError, ValueError):
                     logger.exception("Failed to assign/unassign plugin %s", pid)
+            try:
+                db.set_setting(f"camera_{cam_id}_plugins_explicit", True)
+            except (sqlite3.Error, OSError, ValueError):
+                logger.warning("Failed to persist explicit plugin mode for camera id=%s", cam_id, exc_info=True)
             for pid, cb in plugin_checks.items():
                 if not cb.isChecked():
                     continue
@@ -1091,8 +1111,14 @@ class CameraDetailPanel(QWidget):
             self.saved.emit()
 
         save_btn.clicked.connect(_do_save)
-        ab.addWidget(save_btn)
-        lay.addLayout(ab)
+        lay.addLayout(
+            make_manager_footer_layout(
+                left_widget=del_btn_edit,
+                right_widgets=[cancel_btn, save_btn],
+                margins=(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD),
+                spacing=SPACE_SM,
+            )
+        )
 
     def _open_edit(self):
         if self._cam is None:
@@ -1117,7 +1143,7 @@ class CameraDetailPanel(QWidget):
         layout.setContentsMargins(SPACE_20, SPACE_LG, SPACE_20, SPACE_LG)
         layout.setSpacing(SPACE_MD)
 
-        title_lbl = QLabel(f"Detection Classes — {plugin_name}")
+        title_lbl = QLabel(f"Plugins Classes — {plugin_name}")
         tf = QFont()
         safe_set_point_size(tf, FONT_SIZE_SUBHEAD)
         tf.setBold(True)

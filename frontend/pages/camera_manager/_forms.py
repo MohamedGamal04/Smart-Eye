@@ -20,14 +20,14 @@ from PySide6.QtWidgets import (
 
 from backend.repository import db
 from frontend.app_theme import safe_set_point_size
+from frontend.widgets.action_feedback import make_manager_footer_layout
 from frontend.widgets.toggle_switch import ToggleSwitch
 from frontend.ui_tokens import (
     FONT_SIZE_CAPTION,
     FONT_SIZE_SUBHEAD,
-    RADIUS_SM,
-    SIZE_BTN_W_84,
-    SIZE_CONTROL_32,
+    SIZE_BTN_W_80,
     SIZE_CONTROL_MD,
+    SIZE_SECTION_H,
     SPACE_10,
     SPACE_14,
     SPACE_20,
@@ -43,7 +43,7 @@ from ._constants import (
     _BG_RAISED,
     _BG_SURFACE,
     _BORDER_DIM,
-    _PRIMARY_BTN,
+    _TEXT_BTN_BLUE,
     _TEXT_BTN_GHOST,
     _TEXT_MUTED,
     _TEXT_PRI,
@@ -85,9 +85,10 @@ class AddCameraPanel(QWidget):
         t.setStyleSheet(f"color:{_TEXT_PRI};")
         bh.addWidget(t)
         bh.addStretch()
+
         close_x = QPushButton("✕")
-        close_x.setFixedSize(SIZE_CONTROL_32, SIZE_CONTROL_32)
-        close_x.setStyleSheet(_TEXT_BTN_GHOST + f"border-radius:{RADIUS_SM}px;")
+        close_x.setFixedSize(SIZE_CONTROL_MD, SIZE_CONTROL_MD)
+        close_x.setStyleSheet(_TEXT_BTN_GHOST)
         close_x.clicked.connect(lambda: self.close_requested.emit())
         bh.addWidget(close_x)
         lay.addWidget(banner)
@@ -119,16 +120,19 @@ class AddCameraPanel(QWidget):
 
         self._e_name = QLineEdit()
         self._e_name.setPlaceholderText("e.g. Front Door")
+        self._e_name.setFixedHeight(SIZE_SECTION_H)
         self._e_name.setStyleSheet(_input_ss())
         bl.addWidget(_srow("Name *", self._e_name))
 
         self._e_source = QLineEdit()
         self._e_source.setPlaceholderText("rtsp://… or 0 for webcam")
+        self._e_source.setFixedHeight(SIZE_SECTION_H)
         self._e_source.setStyleSheet(_input_ss())
         bl.addWidget(_srow("Source *", self._e_source))
 
         self._e_location = QLineEdit()
         self._e_location.setPlaceholderText("e.g. Entrance, Room 1")
+        self._e_location.setFixedHeight(SIZE_SECTION_H)
         self._e_location.setStyleSheet(_input_ss())
         bl.addWidget(_srow("Location", self._e_location))
 
@@ -164,7 +168,7 @@ class AddCameraPanel(QWidget):
 
         self._active_plugins_toggle = ToggleSwitch()
         self._active_plugins_toggle.setChecked(True)
-        bl.addWidget(_srow("Enable Active Plugins", _left(self._active_plugins_toggle)))
+        bl.addWidget(_srow("Active Plugins", _left(self._active_plugins_toggle)))
 
         self._enabled_toggle = ToggleSwitch()
         self._enabled_toggle.setChecked(True)
@@ -183,6 +187,13 @@ class AddCameraPanel(QWidget):
         self._max_faces_spin.setStyleSheet(_spin_ss())
         bl.addWidget(_srow("Max Faces / Frame", self._max_faces_spin))
 
+        self._min_face_size_spin = QSpinBox()
+        self._min_face_size_spin.setRange(10, 500)
+        self._min_face_size_spin.setValue(40)
+        self._min_face_size_spin.setSuffix(" px")
+        self._min_face_size_spin.setStyleSheet(_spin_ss())
+        bl.addWidget(_srow("Min Face Size", self._min_face_size_spin))
+
         bl.addStretch()
 
         ab_sep = QFrame()
@@ -190,24 +201,24 @@ class AddCameraPanel(QWidget):
         ab_sep.setStyleSheet(f"background:{_BORDER_DIM};border:none;max-height:{SPACE_XXXS}px;")
         lay.addWidget(ab_sep)
 
-        ab = QHBoxLayout()
-        ab.setContentsMargins(SPACE_20, SPACE_10, SPACE_20, SPACE_MD)
-        ab.setSpacing(SPACE_SM)
-        ab.addStretch()
-
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setFixedHeight(SIZE_CONTROL_MD)
-        cancel_btn.setFixedWidth(SIZE_BTN_W_84)
+        cancel_btn.setFixedWidth(SIZE_BTN_W_80)
         cancel_btn.setStyleSheet(_TEXT_BTN_GHOST)
         cancel_btn.clicked.connect(lambda: self.close_requested.emit())
-        ab.addWidget(cancel_btn)
 
-        add_btn = QPushButton("Add Camera")
+        add_btn = QPushButton("Save")
         add_btn.setFixedHeight(SIZE_CONTROL_MD)
-        add_btn.setStyleSheet(_PRIMARY_BTN)
+        add_btn.setFixedWidth(SIZE_BTN_W_80)
+        add_btn.setStyleSheet(_TEXT_BTN_BLUE)
         add_btn.clicked.connect(self._do_save)
-        ab.addWidget(add_btn)
-        lay.addLayout(ab)
+        lay.addLayout(
+            make_manager_footer_layout(
+                right_widgets=[cancel_btn, add_btn],
+                margins=(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD),
+                spacing=SPACE_SM,
+            )
+        )
         self._add_btn = add_btn
 
     def reset(self):
@@ -220,6 +231,7 @@ class AddCameraPanel(QWidget):
         self._active_plugins_toggle.setChecked(True)
         self._thresh_spin.setValue(45)
         self._max_faces_spin.setValue(16)
+        self._min_face_size_spin.setValue(40)
         self._enabled_toggle.setChecked(True)
 
     def _set_busy(self, busy: bool):
@@ -256,6 +268,7 @@ class AddCameraPanel(QWidget):
             enabled=1 if self._enabled_toggle.isChecked() else 0,
             threshold=self._thresh_spin.value() / 100.0,
             max_faces=int(self._max_faces_spin.value()),
+            min_face_size=int(self._min_face_size_spin.value()),
         )
 
         class _AddWorker(QThread):
@@ -280,12 +293,16 @@ class AddCameraPanel(QWidget):
                         db.update_camera(cam_id, face_similarity_threshold=self.opts["threshold"])
                     with contextlib.suppress(Exception):
                         db.set_setting(f"camera_{cam_id}_max_faces", self.opts["max_faces"])
+                    with contextlib.suppress(Exception):
+                        db.set_setting(f"camera_{cam_id}_min_face_size", self.opts["min_face_size"])
                     if self.opts.get("assign_active_plugins"):
                         with contextlib.suppress(Exception):
                             for plug in db.get_plugins(enabled_only=True) or []:
                                 pid = plug.get("id")
                                 if pid is not None:
                                     db.assign_plugin_to_camera(cam_id, pid)
+                    with contextlib.suppress(Exception):
+                        db.set_setting(f"camera_{cam_id}_plugins_explicit", True)
                     self.done.emit(None, cam_id)
                 except (RuntimeError, AttributeError, TypeError, ValueError, OSError) as exc:
                     self.done.emit(exc, None)

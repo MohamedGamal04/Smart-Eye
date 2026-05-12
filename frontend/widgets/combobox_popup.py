@@ -20,8 +20,12 @@ class _ComboPopupEnhancer(QObject):
     @staticmethod
     def _resolve_combo_owner(popup: QFrame) -> QComboBox | None:
         parent = popup.parentWidget()
+        # Walk up the parent chain to find the originating QComboBox. Some
+        # combos live deep inside nested layouts/scrollareas, so allow a
+        # generous traversal depth.
         hops = 0
-        while parent is not None and hops < 5:
+        max_hops = 50
+        while parent is not None and hops < max_hops:
             if isinstance(parent, QComboBox):
                 return parent
             parent = parent.parentWidget()

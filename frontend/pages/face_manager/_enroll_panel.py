@@ -3,8 +3,8 @@
 import contextlib
 import re
 
-from PySide6.QtCore import Qt, QRegularExpression, QSettings
-from PySide6.QtGui import QFont, QRegularExpressionValidator
+from PySide6.QtCore import Qt, QRegularExpression, QSettings, QTimer
+from PySide6.QtGui import QFont, QIcon, QRegularExpressionValidator, QPixmap, QTransform
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -22,6 +22,7 @@ from frontend.app_theme import safe_set_point_size
 from frontend.widgets.face_capture_widget import FaceCaptureWidget
 from frontend.widgets.toggle_switch import ToggleSwitch
 from frontend.styles._colors import _WARNING_ORANGE
+from frontend.styles._input_styles import _FORM_COMBO
 from frontend.ui_tokens import (
     FONT_SIZE_BODY,
     FONT_SIZE_CAPTION,
@@ -34,6 +35,7 @@ from frontend.ui_tokens import (
     SIZE_LABEL_W,
     SIZE_ROW_84,
     SIZE_ROW_MD,
+    SPACE_10,
     SPACE_14,
     SPACE_20,
     SPACE_6,
@@ -46,12 +48,12 @@ from frontend.ui_tokens import (
 
 from ._constants import (
     _DANGER,
-    _DANGER_BTN,
-    _PRIMARY_BTN,
     _BG_RAISED,
     _BORDER_DIM,
     _STYLESHEET,
     _SUCCESS,
+    _TEXT_BTN_BLUE,
+    _TEXT_BTN_RED,
     _TEXT_PRI,
     _TEXT_SEC,
     _compose_name,
@@ -75,16 +77,21 @@ class _EnrollPanelMixin:
             self._ef_birth,
             self._ef_phone,
             self._ef_email,
+            getattr(self, "_ef_national_id", None),
         ]:
             edit.clear()
         self._ef_auth.setChecked(True)
         self._enroll_capture.reset()
+        self._stop_enroll_status_spinner()
+        self._stop_enroll_button_spinner()
         self._enroll_status_lbl.setText("")
         self._pre_enroll_sizes = self._splitter.sizes()
         self._right_stack.setCurrentIndex(1)
         self._enroll_capture.start_camera(0)
 
     def _close_enroll_panel(self):
+        self._stop_enroll_status_spinner()
+        self._stop_enroll_button_spinner()
         if self._enroll_panel is not None:
             with contextlib.suppress(Exception):
                 self._enroll_capture.stop_camera()
@@ -116,17 +123,20 @@ class _EnrollPanelMixin:
         root.addWidget(sub)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setHandleWidth(SPACE_XXS)
-        splitter.setStyleSheet(f"QSplitter::handle {{ background: {_BORDER_DIM}; }}")
+        splitter.setHandleWidth(SPACE_10)
+        splitter.setStyleSheet("QSplitter::handle { background: transparent; }")
 
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(0)
 
-        def _add_field(label, widget):
+        def _add_field(label, widget, *, with_bottom_border=True):
             row = QWidget()
-            row.setStyleSheet(f"background: transparent; border-bottom: {SPACE_XXXS}px solid {_BORDER_DIM};")
+            _row_border = (
+                f"border-bottom: {SPACE_XXXS}px solid {_BORDER_DIM};" if with_bottom_border else "border-bottom: none;"
+            )
+            row.setStyleSheet(f"background: transparent; {_row_border}")
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 0, 0, 0)
             rl.setSpacing(0)
@@ -137,10 +147,15 @@ class _EnrollPanelMixin:
                 f"color: {_TEXT_SEC}; font-size: {FONT_SIZE_LABEL}px; padding-right: {SPACE_MD}px; background: transparent; border: none;"
             )
             rl.addWidget(lbl)
-            widget.setStyleSheet(
-                f"background: transparent; border: none; border-radius: {RADIUS_NONE}px;"
-                f" padding: 0 {SPACE_XS}px; color: {_TEXT_PRI}; font-size: {FONT_SIZE_BODY}px;"
-            )
+            # Use a non-transparent combo style for dropdowns so the popup
+            # background and items are rendered with proper surface colors.
+            if isinstance(widget, QComboBox):
+                widget.setStyleSheet(_FORM_COMBO)
+            else:
+                widget.setStyleSheet(
+                    f"background: transparent; border: none; border-radius: {RADIUS_NONE}px;"
+                    f" padding: 0 {SPACE_XS}px; color: {_TEXT_PRI}; font-size: {FONT_SIZE_BODY}px;"
+                )
             widget.setFixedHeight(SIZE_CONTROL_MD)
             rl.addWidget(widget, stretch=1)
             return row
@@ -149,6 +164,7 @@ class _EnrollPanelMixin:
         _dept_re = QRegularExpression(r".*")
         _addr_re = QRegularExpression(r"[\p{L}\p{N} '\-.,/#&()]*")
         _country_re = QRegularExpression(r"[\p{L} '\-.]*")
+        _nid_re = QRegularExpression(r"[A-Za-z0-9\- ]*")
         _phone_re = QRegularExpression(r"[\d+\-() ]*")
         _email_re = QRegularExpression(r"[a-zA-Z0-9!#$%&'*+\-/=?^_`{|}~@.\[\]]*")
 
@@ -180,6 +196,10 @@ class _EnrollPanelMixin:
         self._ef_country.setPlaceholderText("Optional")
         self._ef_country.setValidator(QRegularExpressionValidator(_country_re))
         self._ef_country.setMaxLength(60)
+        self._ef_national_id = QLineEdit()
+        self._ef_national_id.setPlaceholderText("National ID (optional)")
+        self._ef_national_id.setValidator(QRegularExpressionValidator(_nid_re))
+        self._ef_national_id.setMaxLength(60)
         self._ef_birth = QLineEdit()
         self._ef_birth.setPlaceholderText("DD-MM-YYYY")
         self._ef_birth.setMaxLength(10)
@@ -226,6 +246,7 @@ class _EnrollPanelMixin:
             ("Third Name", self._ef_third),
             ("Last Name", self._ef_last),
             ("Department", self._ef_dept),
+            ("National ID", self._ef_national_id),
             ("Address", self._ef_address),
             ("Country", self._ef_country),
             ("Birth Date", self._ef_birth),
@@ -238,7 +259,7 @@ class _EnrollPanelMixin:
         self._ef_gender = QComboBox()
         self._ef_gender.addItems(["Unknown", "Male", "Female"])
         self._ef_gender.setCurrentIndex(0)
-        fields_layout.addWidget(_add_field("Gender", self._ef_gender))
+        fields_layout.addWidget(_add_field("Gender", self._ef_gender, with_bottom_border=False))
 
         access_row = QWidget()
         access_row.setFixedHeight(SIZE_ROW_MD)
@@ -282,12 +303,21 @@ class _EnrollPanelMixin:
         footer_vbox.setContentsMargins(0, SPACE_6, 0, 0)
         footer_vbox.setSpacing(SPACE_XS)
 
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
+        status_row.setSpacing(SPACE_6)
+        self._enroll_loading_icon_lbl = QLabel()
+        self._enroll_loading_icon_lbl.setFixedSize(14, 14)
+        self._enroll_loading_icon_lbl.setVisible(False)
+        status_row.addWidget(self._enroll_loading_icon_lbl)
+
         self._enroll_status_lbl = QLabel("")
         self._enroll_status_lbl.setWordWrap(False)
         self._enroll_status_lbl.setStyleSheet(
             f"color: {_TEXT_SEC}; font-size: {FONT_SIZE_CAPTION}px; padding: 0 {SPACE_XS}px; background: transparent;"
         )
-        footer_vbox.addWidget(self._enroll_status_lbl)
+        status_row.addWidget(self._enroll_status_lbl, 1)
+        footer_vbox.addLayout(status_row)
         footer_vbox.addStretch()
 
         btn_row = QHBoxLayout()
@@ -297,12 +327,12 @@ class _EnrollPanelMixin:
 
         self._enroll_save_btn = QPushButton("Save")
         self._enroll_save_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
-        self._enroll_save_btn.setStyleSheet(_PRIMARY_BTN)
+        self._enroll_save_btn.setStyleSheet(_TEXT_BTN_BLUE)
         btn_row.addWidget(self._enroll_save_btn)
 
         cancel_btn = QPushButton("Close")
         cancel_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
-        cancel_btn.setStyleSheet(_DANGER_BTN)
+        cancel_btn.setStyleSheet(_TEXT_BTN_RED)
         cancel_btn.clicked.connect(self._close_enroll_panel)
         btn_row.addWidget(cancel_btn)
 
@@ -329,6 +359,86 @@ class _EnrollPanelMixin:
 
         self._enroll_save_btn.clicked.connect(lambda: self._do_save_enroll(panel))
         return panel
+
+    def _start_enroll_status_spinner(self) -> None:
+        base_icon = QPixmap("frontend/assets/icons/loading.png")
+        if base_icon.isNull() or not hasattr(self, "_enroll_loading_icon_lbl"):
+            return
+
+        self._stop_enroll_status_spinner()
+        angle = 0
+
+        def _render_frame() -> None:
+            rotated = base_icon.transformed(QTransform().rotate(angle), Qt.TransformationMode.SmoothTransformation)
+            self._enroll_loading_icon_lbl.setPixmap(
+                rotated.scaled(
+                    14,
+                    14,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+
+        def _tick() -> None:
+            nonlocal angle
+            angle = (angle + 18) % 360
+            _render_frame()
+
+        _render_frame()
+        self._enroll_loading_icon_lbl.setVisible(True)
+        self._enroll_status_spin_timer = QTimer(self)
+        self._enroll_status_spin_timer.setInterval(40)
+        self._enroll_status_spin_timer.timeout.connect(_tick)
+        self._enroll_status_spin_timer.start()
+
+    def _stop_enroll_status_spinner(self) -> None:
+        timer = getattr(self, "_enroll_status_spin_timer", None)
+        if timer is not None:
+            timer.stop()
+            self._enroll_status_spin_timer = None
+        if hasattr(self, "_enroll_loading_icon_lbl"):
+            self._enroll_loading_icon_lbl.clear()
+            self._enroll_loading_icon_lbl.setVisible(False)
+
+    def _start_enroll_button_spinner(self) -> None:
+        base_icon = QPixmap("frontend/assets/icons/loading.png")
+        if base_icon.isNull():
+            return
+
+        self._stop_enroll_button_spinner()
+        angle = 0
+
+        def _render_frame() -> None:
+            rotated = base_icon.transformed(QTransform().rotate(angle), Qt.TransformationMode.SmoothTransformation)
+            self._enroll_save_btn.setIcon(
+                QIcon(
+                    rotated.scaled(
+                        14,
+                        14,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+            )
+
+        def _tick() -> None:
+            nonlocal angle
+            angle = (angle + 18) % 360
+            _render_frame()
+
+        _render_frame()
+        self._enroll_btn_spin_timer = QTimer(self)
+        self._enroll_btn_spin_timer.setInterval(40)
+        self._enroll_btn_spin_timer.timeout.connect(_tick)
+        self._enroll_btn_spin_timer.start()
+
+    def _stop_enroll_button_spinner(self) -> None:
+        timer = getattr(self, "_enroll_btn_spin_timer", None)
+        if timer is not None:
+            timer.stop()
+            self._enroll_btn_spin_timer = None
+        if hasattr(self, "_enroll_save_btn"):
+            self._enroll_save_btn.setIcon(QIcon())
 
     def _do_save_enroll(self, panel: QWidget):
         first_name = self._ef_first.text().strip()
@@ -364,6 +474,8 @@ class _EnrollPanelMixin:
 
         self._enroll_save_btn.setEnabled(False)
         self._enroll_save_btn.setText("Processing...")
+        self._start_enroll_button_spinner()
+        self._start_enroll_status_spinner()
         self._enroll_status_lbl.setText("Extracting face embeddings, please wait...")
         self._enroll_status_lbl.setStyleSheet(f"color: {_WARNING_ORANGE}; font-size: {FONT_SIZE_LABEL}px; padding: {SPACE_XS}px;")
 
@@ -375,6 +487,7 @@ class _EnrollPanelMixin:
             gender=self._ef_gender.currentText().strip(),
             address=self._ef_address.text().strip(),
             country=self._ef_country.text().strip(),
+            national_id=self._ef_national_id.text().strip(),
             birth_date=self._ef_birth.text().strip(),
             phone=self._ef_phone.text().strip(),
             email=self._ef_email.text().strip(),
@@ -386,6 +499,8 @@ class _EnrollPanelMixin:
         def _on_done(ok, msg):
             self._enroll_save_btn.setEnabled(True)
             self._enroll_save_btn.setText("Save")
+            self._stop_enroll_button_spinner()
+            self._stop_enroll_status_spinner()
             self._worker = None
             if ok:
                 self._enroll_status_lbl.setText(msg)

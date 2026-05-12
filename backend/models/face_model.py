@@ -22,7 +22,7 @@ AVAILABLE_MODELS = {
     "antelopev2": "antelopev2 - Highest accuracy (large)",
 }
 
-ALLOWED_MODULES = ["detection", "recognition", "genderage"]
+ALLOWED_MODULES = ["detection", "recognition"]
 
 
 def normalize_gender(value) -> str:
@@ -80,30 +80,40 @@ def _extract_gender_info(face_obj) -> tuple[str, float]:
 def get_allowed_modules() -> list[str]:
     import json as _json
 
+    gender_enabled = db.get_bool("gender_inference_enabled", False)
+
     try:
         raw = db.get_setting("insightface_allowed_modules", None)
         if raw:
             mods = _json.loads(raw) if isinstance(raw, str) else raw
-            if isinstance(mods, list) and mods:
-
-                migrated = db.get_bool("insightface_allowed_modules_genderage_migrated", False)
-                if not migrated and "genderage" not in mods:
-                    mods = list(mods) + ["genderage"]
-                    with contextlib.suppress(Exception):
-                        db.set_setting("insightface_allowed_modules", _json.dumps(mods))
-                    with contextlib.suppress(Exception):
-                        db.set_setting("insightface_allowed_modules_genderage_migrated", "1")
-                return mods
+            if isinstance(mods, list):
+                filtered = []
+                for m in mods:
+                    if m in ("detection", "recognition", "genderage") and m not in filtered:
+                        filtered.append(m)
+                if not gender_enabled:
+                    filtered = [m for m in filtered if m != "genderage"]
+                return filtered
     except Exception:
         pass
-    return list(ALLOWED_MODULES)
+
+    base = list(ALLOWED_MODULES)
+    if gender_enabled:
+        base.append("genderage")
+    return base
 
 
 def set_allowed_modules(modules: list[str]) -> None:
     import json as _json
 
     try:
-        db.set_setting("insightface_allowed_modules", _json.dumps(modules))
+        cleaned = []
+        for m in (modules or []):
+            if m in ("detection", "recognition", "genderage") and m not in cleaned:
+                cleaned.append(m)
+        if not db.get_bool("gender_inference_enabled", False):
+            cleaned = [m for m in cleaned if m != "genderage"]
+        db.set_setting("insightface_allowed_modules", _json.dumps(cleaned))
     except Exception:
         pass
 
@@ -205,6 +215,29 @@ def _detect_providers() -> list[str]:
     return _cached_providers
 
 
+def _resolve_insightface_package_name(root: str, model_name: str) -> str | None:
+    def _has_onnx_files(path: str) -> bool:
+        return os.path.isdir(path) and bool(glob.glob(os.path.join(path, "*.onnx")))
+
+    model_dir = os.path.join(root, "models", model_name)
+    if _has_onnx_files(model_dir):
+        return model_name
+    if not os.path.isdir(model_dir):
+        return None
+
+    direct_nested = os.path.join(model_dir, model_name)
+    if _has_onnx_files(direct_nested):
+        return os.path.join(model_name, model_name).replace("\\", "/")
+
+    with contextlib.suppress(OSError):
+        for name in os.listdir(model_dir):
+            child_path = os.path.join(model_dir, name)
+            if os.path.isdir(child_path) and _has_onnx_files(child_path):
+                return os.path.join(model_name, name).replace("\\", "/")
+
+    return None
+
+
 def _find_insightface_root(hint: str = "", model_name: str = "") -> str | None:
     if not model_name:
         model_name = _get_model_name()
@@ -228,10 +261,6 @@ def _find_insightface_root(hint: str = "", model_name: str = "") -> str | None:
 
     checked = set()
 
-    def _has_model(root: str) -> bool:
-        model_dir = os.path.join(root, "models", model_name)
-        return os.path.isdir(model_dir) and bool(glob.glob(os.path.join(model_dir, "*.onnx")))
-
     for raw in candidates:
         root = os.path.abspath(raw)
         if root in checked:
@@ -239,7 +268,7 @@ def _find_insightface_root(hint: str = "", model_name: str = "") -> str | None:
         checked.add(root)
         if not os.path.isdir(root):
             continue
-        if _has_model(root):
+        if _resolve_insightface_package_name(root, model_name):
             return root
         for zp in glob.glob(os.path.join(root, "**", f"{model_name}.zip"), recursive=True):
             try:
@@ -247,7 +276,7 @@ def _find_insightface_root(hint: str = "", model_name: str = "") -> str | None:
                 os.makedirs(dest, exist_ok=True)
                 with zipfile.ZipFile(zp, "r") as zf:
                     zf.extractall(dest)
-                if _has_model(root):
+                if _resolve_insightface_package_name(root, model_name):
                     return root
             except Exception:
                 continue
@@ -263,6 +292,7 @@ class FaceModel:
         self._load_lock = threading.Lock()
         self._root_used: str | None = None
         self._model_name: str = _get_model_name()
+        self._package_name: str = self._model_name
         self._providers_used: list[str] = []
         self._last_load_error: str | None = None
         self._known_matrix: np.ndarray | None = None
@@ -335,10 +365,18 @@ class FaceModel:
                 root = os.path.expanduser("~/.insightface")
 
             self._providers_used = providers
+            resolved_package_name = _resolve_insightface_package_name(root, self._model_name) or self._model_name
+            self._package_name = resolved_package_name
+            if resolved_package_name != self._model_name:
+                _logger.info(
+                    "Resolved nested InsightFace package for %s -> %s",
+                    self._model_name,
+                    resolved_package_name,
+                )
 
             def _try_load(prov_list, det_size):
                 app = FaceAnalysis(
-                    name=self._model_name,
+                    name=resolved_package_name,
                     root=root,
                     providers=prov_list,
                     allowed_modules=get_allowed_modules(),
@@ -387,7 +425,7 @@ class FaceModel:
     def get_submodel_status(self) -> list[dict]:
         if self._root_used is None:
             return []
-        model_dir = os.path.join(self._root_used, "models", self._model_name)
+        model_dir = os.path.join(self._root_used, "models", self._package_name or self._model_name)
         if not os.path.isdir(model_dir):
             return []
         loaded_tasks: set[str] = set()
@@ -494,7 +532,7 @@ class FaceModel:
             _logger.warning("detect_faces: inference error", exc_info=True)
             return []
         results = []
-        gender_enabled = db.get_bool("gender_inference_enabled", True)
+        gender_enabled = db.get_bool("gender_inference_enabled", False)
         for f in faces:
             try:
                 bbox = [int(b) for b in f.bbox]

@@ -61,15 +61,13 @@ def invalidate_cache():
         _CLASS_COLOR_CACHE["data"] = {}
 
 
-def merge_results(detection_results, camera_id, zone_info=None):
+def merge_results(detection_results, camera_id):
     state = {
         "identity": None,
         "gender": "unknown",
         "face_confidence": 0.0,
         "gender_confidence": 0.0,
         "liveness": 1.0,
-        "zone": None,
-        "zone_id": None,
         "camera_id": camera_id,
         "face_bbox": None,
         "all_faces": [],
@@ -91,38 +89,16 @@ def merge_results(detection_results, camera_id, zone_info=None):
         }
         for f in faces
     ]
-
-    for gf in detection_results.get("ghost_faces", []):
-        if not gf.get("bbox"):
-            continue
-        _gi = gf.get("identity")
-        state["all_faces"].append(
-            {
-                "bbox": gf["bbox"],
-                "identity": _gi["name"] if isinstance(_gi, dict) else _gi,
-                "gender": normalize_gender(gf.get("gender")),
-                "confidence": gf.get("confidence", 0.0),
-                "gender_confidence": gf.get("gender_confidence", 0.0),
-                "liveness": gf.get("liveness", 1.0),
-                "track_vx": _as_float(gf.get("track_vx", 0.0)),
-                "track_vy": _as_float(gf.get("track_vy", 0.0)),
-                "ghost": True,
-            }
-        )
     if faces:
-        best_face = max(faces, key=lambda f: f.get("confidence", 0))
+        best_face = max(faces, key=lambda f: float(f.get("confidence", 0.0) or 0.0))
         if best_face.get("identity"):
             state["identity"] = best_face["identity"]["name"]
             state["face_id"] = best_face["identity"]["id"]
-            state["face_confidence"] = best_face["confidence"]
+            state["face_confidence"] = float(best_face.get("confidence", 0.0) or 0.0)
         state["liveness"] = best_face.get("liveness", 1.0)
         state["gender"] = normalize_gender(best_face.get("gender"))
         state["gender_confidence"] = float(best_face.get("gender_confidence", 0.0) or 0.0)
         state["face_bbox"] = best_face["bbox"]
-
-    if zone_info:
-        state["zone"] = zone_info.get("name")
-        state["zone_id"] = zone_info.get("id")
 
     objects = detection_results.get("objects", [])
     class_detections = {}
@@ -137,16 +113,6 @@ def merge_results(detection_results, camera_id, zone_info=None):
         if color:
             obj_entry["bbox_color"] = color
         state["object_bboxes"].append(obj_entry)
-
-    show_ghost_objects = bool(db.get_bool("render_ghost_object_bboxes", False))
-    if show_ghost_objects:
-        for go in detection_results.get("ghost_objects", []):
-            if go.get("bbox"):
-                go_entry = {**go, "ghost": True}
-                color = class_colors.get(go.get("class_name", ""), "")
-                if color:
-                    go_entry["bbox_color"] = color
-                state["object_bboxes"].append(go_entry)
 
     plugin_classes = _get_plugin_classes_cached(enabled_only=True)
     for pc in plugin_classes:

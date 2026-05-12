@@ -103,25 +103,29 @@ class PlaybackThread(QThread):
         _clip_cooldown = 0
 
         def _evaluate_frame(frame, w, h, infer_idx):
-            detection_results = detector.process_frame(frame, self._camera_id)
+            detection_results = detector.process_frame(
+                frame,
+                self._camera_id,
+                run_plugins=self._plugins_enabled,
+                run_faces=self._face_detection_enabled,
+                identify_faces=False,
+                lightweight=True,
+            )
             if not self._plugins_enabled:
                 detection_results["objects"] = []
-                detection_results["ghost_objects"] = []
             if not self._face_detection_enabled:
                 detection_results["faces"] = []
-                detection_results["ghost_faces"] = []
             if self._disabled_object_classes:
                 detection_results["objects"] = [
                     o
                     for o in detection_results.get("objects", [])
                     if str(o.get("class_name") or o.get("class") or "").strip().lower() not in self._disabled_object_classes
                 ]
-                detection_results["ghost_objects"] = [
-                    o
-                    for o in detection_results.get("ghost_objects", [])
-                    if str(o.get("class_name") or o.get("class") or "").strip().lower() not in self._disabled_object_classes
-                ]
-            primary, triggered = build_state(detection_results, self._camera_id, w, h)
+            primary, triggered = build_state(
+                detection_results,
+                self._camera_id,
+                evaluate_rule_triggers=self._record_enabled,
+            )
             return infer_idx, frame, w, h, primary, triggered
 
         def _handle_triggers(primary_state, triggered, frame, frame_idx, video_fps, fw, fh):
@@ -193,8 +197,11 @@ class PlaybackThread(QThread):
                 try:
                     det_idx, det_frame, det_w, det_h, det_state, det_triggered = pending_future.result(timeout=0)
                     if det_idx >= last_detect_frame_idx:
-                        _handle_triggers(det_state, det_triggered, det_frame, det_idx, video_fps, det_w, det_h)
-                        det_state["triggered_rules"] = [r["name"] for r in det_triggered]
+                        if self._record_enabled:
+                            _handle_triggers(det_state, det_triggered, det_frame, det_idx, video_fps, det_w, det_h)
+                            det_state["triggered_rules"] = [r["name"] for r in det_triggered]
+                        else:
+                            det_state["triggered_rules"] = []
                         det_state["frame_index"] = det_idx
                         last_detect_state = det_state
                         last_detect_frame_idx = det_idx
@@ -223,11 +230,20 @@ class PlaybackThread(QThread):
                 and pending_future is None
                 and self._running
                 and not self.isInterruptionRequested()
-                and (frame_idx % infer_stride == 0 or last_detect_frame_idx < 0)
+                and (
+                    frame_idx
+                    % (
+                        max(1, int(round(video_fps / max(1.0, min(self._infer_target_fps, 8.0)))))
+                        if self._face_detection_enabled and not self._plugins_enabled
+                        else infer_stride
+                    )
+                    == 0
+                    or last_detect_frame_idx < 0
+                )
             )
             if should_schedule:
                 try:
-                    pending_future = infer_executor.submit(_evaluate_frame, frame.copy(), w, h, frame_idx)
+                    pending_future = infer_executor.submit(_evaluate_frame, frame, w, h, frame_idx)
                 except RuntimeError as exc:
                     msg = str(exc).lower()
                     if "interpreter shutdown" in msg or "cannot schedule new futures after shutdown" in msg:

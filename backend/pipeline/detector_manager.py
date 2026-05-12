@@ -17,10 +17,6 @@ logger = logging.getLogger(__name__)
 _MAX_INFER_DIM = 512
 
 
-_GHOST_TTL = 0.35
-_MAX_GHOST_V = 28.0
-
-
 def _scale_frame(frame, max_dim=_MAX_INFER_DIM):
     h, w = frame.shape[:2]
     largest = max(h, w)
@@ -153,6 +149,26 @@ def _adaptive_smoothing_alpha(rel_move, match_iou):
     return 0.76
 
 
+def _adaptive_object_smoothing_alpha(rel_move, match_iou):
+    rel = _as_float(rel_move)
+    iou = _as_float(match_iou)
+
+    if rel >= 1.10:
+        return 0.80
+    if rel >= 0.75:
+        return 0.72
+    if rel >= 0.45:
+        return 0.64
+    if rel >= 0.25:
+        return 0.56
+
+    if iou < 0.25:
+        return 0.62
+    if iou < 0.45:
+        return 0.52
+    return 0.44
+
+
 def _pick_best_prev(candidates, curr_box, allow_entry=None, min_iou=0.10, max_rel_dist=3.0):
     best = None
     best_score = -1e9
@@ -201,16 +217,13 @@ class DetectorManager:
         self._cam_plugin_classes_cache = {}
         self._cam_plugin_classes_cache_lock = threading.Lock()
 
-        self._ghost_settings_cache: dict = {}
-        self._ghost_settings_ts: float = 0.0
-
         try:
             self._identify_cooldown = int(config.get("identify_cooldown_frames", 6) or 6)
         except Exception:
             self._identify_cooldown = 6
 
         try:
-            max_threads = int(config.get("max_threads", None) or 0)
+            max_threads = int(config.get("max_cpu_cores", None) or config.get("max_threads", None) or 0)
         except Exception:
             max_threads = 0
 
@@ -268,7 +281,6 @@ class DetectorManager:
             self.trackers_lock = threading.Lock()
             self.smoothing_state = {"faces": [], "objects": []}
             self.smoothing_lock = threading.Lock()
-            self.ghost_store = {"faces": [], "objects": []}
 
     def _get_camera_state(self, camera_id):
         with self._camera_states_lock:
@@ -322,6 +334,9 @@ class DetectorManager:
             except Exception:
                 logger.debug("Failed to check cameras for plugin %s", p.get("id"), exc_info=True)
 
+        if not assigned_enabled:
+            assigned_enabled = {p.get("id") for p in enabled_rows if p.get("id") is not None}
+
         try:
             loaded = set(model_loader.get_loaded_plugins().keys())
             for pid in loaded - assigned_enabled:
@@ -353,7 +368,15 @@ class DetectorManager:
         with self._camera_plugins_lock:
             if camera_id not in self._camera_plugins:
                 cp = db.get_camera_plugins(camera_id)
-                if cp:
+                explicit = False
+                try:
+                    explicit = db.get_bool(f"camera_{camera_id}_plugins_explicit", False)
+                except Exception:
+                    explicit = False
+                if explicit:
+                    # Explicit assignment mode: trust camera-specific list (including empty list).
+                    self._camera_plugins[camera_id] = [p["id"] for p in cp] if cp else []
+                elif cp:
                     self._camera_plugins[camera_id] = [p["id"] for p in cp]
                 else:
                     with self._plugin_models_lock:
@@ -437,7 +460,9 @@ class DetectorManager:
         t0 = time.time()
         faces = self._face_model.detect_faces(small)
         try:
-            min_face_size = int(config.get("min_face_size", 40) or 40)
+            min_face_size = int(db.get_setting(f"camera_{camera_id}_min_face_size", None) or 0)
+            if min_face_size <= 0:
+                min_face_size = int(config.get("min_face_size", 40) or 40)
         except Exception:
             min_face_size = 40
         results = []
@@ -454,7 +479,8 @@ class DetectorManager:
                     "bbox": face["bbox"],
                     "det_score": face.get("det_score", 1.0),
                     "identity": None,
-                    "confidence": None,
+                    # Keep confidence numeric for downstream ranking/aggregation paths.
+                    "confidence": float(face.get("det_score", 0.0) or 0.0),
                     "embedding": face.get("embedding"),
                     "liveness": None,
                     "gender": face.get("gender", "unknown"),
@@ -737,22 +763,6 @@ class DetectorManager:
         with state.trackers_lock:
             state.trackers = entries
 
-    def _get_ghost_settings(self, now):
-        if now - self._ghost_settings_ts > 5.0:
-            try:
-                self._ghost_settings_cache = {
-                    "enabled": db.get_bool("ghost_bbox_enabled", True),
-                    "ttl": float(db.get_float("ghost_bbox_ttl", 0.35) or 0.35),
-                    "max_v": float(db.get_float("ghost_bbox_max_velocity", 28) or 28),
-                }
-            except Exception:
-                pass
-            self._ghost_settings_ts = now
-        ghost_ttl = self._ghost_settings_cache.get("ttl", _GHOST_TTL)
-        max_ghost_v = self._ghost_settings_cache.get("max_v", _MAX_GHOST_V)
-        ghost_feature_on = self._ghost_settings_cache.get("enabled", True)
-        return ghost_ttl, max_ghost_v, ghost_feature_on
-
     @staticmethod
     def _build_grid(entries):
         grid = {}
@@ -790,16 +800,17 @@ class DetectorManager:
 
     def _apply_smoothing(self, camera_id, faces, objects):
         state = self._get_camera_state(camera_id)
+        stable_raw = config.get("experimental_object_bbox_stabilization", True)
+        if isinstance(stable_raw, str):
+            use_stable_object_bboxes = stable_raw.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            use_stable_object_bboxes = bool(stable_raw)
         with state.smoothing_lock:
             prev = state.smoothing_state
-            ghost_store = state.ghost_store
             now = time.time()
-
-            ghost_ttl, max_ghost_v, ghost_feature_on = self._get_ghost_settings(now)
 
             new_face_state = []
             face_grid, face_bucket = self._build_grid(prev.get("faces", []))
-            matched_face_prev: set = set()
 
             for f in faces:
                 curr_box = f.get("bbox")
@@ -863,7 +874,6 @@ class DetectorManager:
                     prev_vy = _as_float(matched.get("vy", 0.0))
                     vx = (0.55 * prev_vx) + (0.45 * inst_vx)
                     vy = (0.55 * prev_vy) + (0.45 * inst_vy)
-                    matched_face_prev.add(id(matched))
 
                 f["track_vx"] = vx
                 f["track_vy"] = vy
@@ -884,52 +894,8 @@ class DetectorManager:
                     }
                 )
 
-            new_ghost_faces = []
-            if ghost_feature_on:
-                for g in ghost_store["faces"]:
-                    if now - g["last_seen"] > ghost_ttl:
-                        continue
-
-                    if any(f.get("bbox") and _iou(f["bbox"], g["bbox"]) > 0.25 for f in faces if f.get("bbox")):
-                        continue
-                    gvx = max(-max_ghost_v, min(max_ghost_v, g.get("vx", 0.0) * 0.8))
-                    gvy = max(-max_ghost_v, min(max_ghost_v, g.get("vy", 0.0) * 0.8))
-                    pb = g["bbox"]
-                    new_ghost_faces.append(
-                        {
-                            **g,
-                            "bbox": [int(pb[0] + gvx), int(pb[1] + gvy), int(pb[2] + gvx), int(pb[3] + gvy)],
-                            "vx": gvx,
-                            "vy": gvy,
-                        }
-                    )
-
-                for p in prev.get("faces", []):
-                    if id(p) in matched_face_prev or not p.get("bbox"):
-                        continue
-                    if now - p.get("last_seen", now) > 0.5:
-                        continue
-                    vx = max(-max_ghost_v, min(max_ghost_v, p.get("vx", 0.0)))
-                    vy = max(-max_ghost_v, min(max_ghost_v, p.get("vy", 0.0)))
-                    new_ghost_faces.append(
-                        {
-                            "bbox": list(p["bbox"]),
-                            "vx": vx,
-                            "vy": vy,
-                            "last_seen": p.get("last_seen", now),
-                            "_ident_info": p.get("_ident_info"),
-                            "_confidence": p.get("_confidence"),
-                            "_liveness": p.get("_liveness", 1.0),
-                            "_det_score": p.get("_det_score", 0.0),
-                            "_gender": p.get("_gender", "unknown"),
-                            "_gender_conf": p.get("_gender_conf", 0.0),
-                        }
-                    )
-            ghost_store["faces"] = new_ghost_faces
-
             new_obj_state = []
             obj_grid, obj_bucket = self._build_grid(prev.get("objects", []))
-            matched_obj_prev: set = set()
 
             for o in objects:
                 curr_box = o.get("bbox")
@@ -956,8 +922,8 @@ class DetectorManager:
                     curr_box,
                     allow_entry=lambda p: p.get("plugin") == plugin
                     and not (p.get("class") is not None and cls is not None and p.get("class") != cls),
-                    min_iou=0.10,
-                    max_rel_dist=3.0,
+                    min_iou=0.16,
+                    max_rel_dist=2.2,
                 )
 
                 vx = vy = 0.0
@@ -967,16 +933,44 @@ class DetectorManager:
                     cx_curr, cy_curr = _bbox_center(curr_box)
                     move_dist = ((cx_prev - cx_curr) ** 2 + (cy_prev - cy_curr) ** 2) ** 0.5
                     rel_move = move_dist / _bbox_size(curr_box)
-                    alpha = _adaptive_smoothing_alpha(rel_move, best_iou)
-                    o["bbox"] = _smooth_bbox(sb_prev, curr_box, alpha=alpha)
-                    sbx, sby = _bbox_center(o["bbox"])
-                    inst_vx = sbx - cx_prev
-                    inst_vy = sby - cy_prev
-                    prev_vx = _as_float(matched.get("vx", 0.0))
-                    prev_vy = _as_float(matched.get("vy", 0.0))
-                    vx = (0.50 * prev_vx) + (0.50 * inst_vx)
-                    vy = (0.50 * prev_vy) + (0.50 * inst_vy)
-                    matched_obj_prev.add(id(matched))
+                    if use_stable_object_bboxes:
+                        if best_iou >= 0.72 and rel_move <= 0.045:
+                            o["bbox"] = [int(v) for v in sb_prev]
+                            prev_vx = _as_float(matched.get("vx", 0.0))
+                            prev_vy = _as_float(matched.get("vy", 0.0))
+                            vx = prev_vx * 0.45
+                            vy = prev_vy * 0.45
+                        else:
+                            alpha = _adaptive_object_smoothing_alpha(rel_move, best_iou)
+                            if rel_move < 0.04:
+                                alpha = min(alpha, 0.38)
+                            o["bbox"] = _smooth_bbox(sb_prev, curr_box, alpha=alpha, max_scale_change=0.06)
+                            sbx, sby = _bbox_center(o["bbox"])
+                            inst_vx = sbx - cx_prev
+                            inst_vy = sby - cy_prev
+                            prev_vx = _as_float(matched.get("vx", 0.0))
+                            prev_vy = _as_float(matched.get("vy", 0.0))
+                            vx = (0.75 * prev_vx) + (0.25 * inst_vx)
+                            vy = (0.75 * prev_vy) + (0.25 * inst_vy)
+                            if abs(vx) < 0.14:
+                                vx = 0.0
+                            if abs(vy) < 0.14:
+                                vy = 0.0
+                    else:
+                        alpha = _adaptive_smoothing_alpha(rel_move, best_iou)
+                        alpha = min(0.92, max(0.72, alpha + 0.08))
+                        o["bbox"] = _smooth_bbox(sb_prev, curr_box, alpha=alpha, max_scale_change=0.12)
+                        sbx, sby = _bbox_center(o["bbox"])
+                        inst_vx = sbx - cx_prev
+                        inst_vy = sby - cy_prev
+                        prev_vx = _as_float(matched.get("vx", 0.0))
+                        prev_vy = _as_float(matched.get("vy", 0.0))
+                        vx = (0.55 * prev_vx) + (0.45 * inst_vx)
+                        vy = (0.55 * prev_vy) + (0.45 * inst_vy)
+                        if abs(vx) < 0.10:
+                            vx = 0.0
+                        if abs(vy) < 0.10:
+                            vy = 0.0
 
                 o["track_vx"] = vx
                 o["track_vy"] = vy
@@ -995,90 +989,13 @@ class DetectorManager:
                     }
                 )
 
-            new_ghost_objects = []
-            if ghost_feature_on:
-                for g in ghost_store["objects"]:
-                    if now - g["last_seen"] > ghost_ttl:
-                        continue
-                    if any(
-                        o.get("bbox") and _iou(o["bbox"], g["bbox"]) > 0.25 and o.get("plugin_id") == g.get("plugin")
-                        for o in objects
-                        if o.get("bbox")
-                    ):
-                        continue
-                    gvx = max(-max_ghost_v, min(max_ghost_v, g.get("vx", 0.0) * 0.8))
-                    gvy = max(-max_ghost_v, min(max_ghost_v, g.get("vy", 0.0) * 0.8))
-                    pb = g["bbox"]
-                    new_ghost_objects.append(
-                        {
-                            **g,
-                            "bbox": [int(pb[0] + gvx), int(pb[1] + gvy), int(pb[2] + gvx), int(pb[3] + gvy)],
-                            "vx": gvx,
-                            "vy": gvy,
-                        }
-                    )
-                for p in prev.get("objects", []):
-                    if id(p) in matched_obj_prev or not p.get("bbox"):
-                        continue
-                    if now - p.get("last_seen", now) > 0.5:
-                        continue
-                    vx = max(-max_ghost_v, min(max_ghost_v, p.get("vx", 0.0)))
-                    vy = max(-max_ghost_v, min(max_ghost_v, p.get("vy", 0.0)))
-                    new_ghost_objects.append(
-                        {
-                            "bbox": list(p["bbox"]),
-                            "vx": vx,
-                            "vy": vy,
-                            "last_seen": p.get("last_seen", now),
-                            "plugin": p.get("plugin"),
-                            "class": p.get("class"),
-                            "_class_name": p.get("_class_name"),
-                            "_plugin_name": p.get("_plugin_name"),
-                            "_det_score": p.get("_det_score", 0.0),
-                        }
-                    )
-            ghost_store["objects"] = new_ghost_objects
-
             prev["faces"] = new_face_state
             prev["objects"] = new_obj_state
             state.smoothing_state = prev
-            state.ghost_store = ghost_store
 
-            ghost_faces = [
-                {
-                    "bbox": g["bbox"],
-                    "identity": g.get("_ident_info"),
-                    "confidence": g.get("_confidence"),
-                    "liveness": g.get("_liveness", 1.0),
-                    "det_score": g.get("_det_score", 0.0),
-                    "embedding": None,
-                    "gender": g.get("_gender", "unknown"),
-                    "gender_confidence": g.get("_gender_conf", 0.0),
-                    "track_vx": _as_float(g.get("vx", 0.0)),
-                    "track_vy": _as_float(g.get("vy", 0.0)),
-                    "ghost": True,
-                }
-                for g in ghost_store["faces"]
-            ]
+        return [], []
 
-            ghost_objects = [
-                {
-                    "bbox": g["bbox"],
-                    "class": g.get("class"),
-                    "class_name": g.get("_class_name"),
-                    "plugin_id": g.get("plugin"),
-                    "plugin_name": g.get("_plugin_name"),
-                    "det_score": g.get("_det_score", 0.0),
-                    "track_vx": _as_float(g.get("vx", 0.0)),
-                    "track_vy": _as_float(g.get("vy", 0.0)),
-                    "ghost": True,
-                }
-                for g in ghost_store["objects"]
-            ]
-
-        return ghost_faces, ghost_objects
-
-    def process_frame(self, frame, camera_id):
+    def process_frame(self, frame, camera_id, run_plugins=True, run_faces=True, identify_faces=True, lightweight=False):
         self.ensure_initialized()
         state = self._get_camera_state(camera_id)
 
@@ -1089,8 +1006,8 @@ class DetectorManager:
         _, aggressive_mode, max_identify, max_trackers = self._read_frame_settings()
         small, scale = self._scale_for_mode(frame, aggressive_mode)
 
-        plugin_ids = self.get_plugins_for_camera(camera_id)
-        face_enabled = self._is_face_enabled(camera_id)
+        plugin_ids = self.get_plugins_for_camera(camera_id) if run_plugins else []
+        face_enabled = bool(run_faces) and self._is_face_enabled(camera_id)
 
         futures = self._submit_inference_futures(camera_id, small, scale, plugin_ids, face_enabled)
         faces, objects, face_ms, obj_ms = self._collect_futures(futures)
@@ -1098,19 +1015,17 @@ class DetectorManager:
         logger.debug("Frame %d: faces=%d objects=%d", frame_idx, len(faces), len(objects))
 
         objects = self._filter_allowed_objects(objects)
-        if faces:
+        if faces and identify_faces and not lightweight:
             self._identify_faces_for_frame(camera_id, faces, aggressive_mode, max_identify, small, frame_idx)
 
-        if faces or objects:
-            self._rebuild_trackers(camera_id, faces, objects, max_trackers)
-
-        ghost_faces, ghost_objects = self._apply_smoothing(camera_id, faces, objects)
+        if not lightweight:
+            if faces or objects:
+                self._rebuild_trackers(camera_id, faces, objects, max_trackers)
+            self._apply_smoothing(camera_id, faces, objects)
 
         return {
             "faces": faces,
             "objects": objects,
-            "ghost_faces": ghost_faces,
-            "ghost_objects": ghost_objects,
             "face_time_ms": face_ms,
             "object_time_ms": obj_ms,
         }
@@ -1143,6 +1058,9 @@ class DetectorManager:
 
     def _is_face_enabled(self, camera_id):
         try:
+            global_enabled = bool(config.get("face_recognition_enabled_global", True))
+            if not global_enabled:
+                return False
             cam = self._get_camera_settings_cached(camera_id)
             return True if cam is None else bool(cam.get("face_recognition", 1))
         except Exception:

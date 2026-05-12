@@ -874,11 +874,7 @@ class DebugTab(QWidget):
             self._seed_count.setEnabled(True)
             self._seed_type_rec.setEnabled(True)
             if ok:
-                QMessageBox.information(self, "Done", msg)
-                self._seed_status.setText(
-                    "Creates new dummy cameras and populates the database with synthetic detection events "
-                    "including real faces (single debug PNG), notification profiles, gender, objects, real rule-engine hits, and heatmap boxes. Existing data is preserved."
-                )
+                self._seed_status.setText(msg)
             else:
                 logger.exception("seed_records error")
                 QMessageBox.warning(self, "Error", msg)

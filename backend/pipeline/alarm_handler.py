@@ -179,7 +179,6 @@ class AlarmHandler:
             )
         row_id = db.add_detection_log(
             camera_id=state.get("camera_id"),
-            zone_id=state.get("zone_id"),
             identity=state.get("identity"),
             face_confidence=state.get("face_confidence", 0),
             detections=state.get("detections", {}),
@@ -330,7 +329,6 @@ class AlarmHandler:
                 "identity": state.get("identity"),
                 "detections": state.get("detections", {}),
                 "camera_id": state.get("camera_id"),
-                "zone": state.get("zone"),
                 "timestamp": time.time(),
             }
             send_webhook(url, payload, auth_token=auth_token)

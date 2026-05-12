@@ -305,36 +305,38 @@ class ONNXObjectModel:
         classes = []
 
         if out.ndim == 2 and out.shape[1] >= 5:
-            for row in out:
-                x, y, w_box, h_box = float(row[0]), float(row[1]), float(row[2]), float(row[3])
-                class_probs = row[4:]
+            class_probs = out[:, 4:]
+            if class_probs.size:
+                cls_ids = np.argmax(class_probs, axis=1).astype(np.int32, copy=False)
+                row_idx = np.arange(class_probs.shape[0], dtype=np.int32)
+                cls_scores = class_probs[row_idx, cls_ids]
+                keep = cls_scores >= float(self._confidence)
 
-                if class_probs.size == 0:
-                    continue
+                if np.any(keep):
+                    kept = out[keep]
+                    kept_cls_ids = cls_ids[keep]
+                    kept_scores = cls_scores[keep]
 
-                cls_id = int(np.argmax(class_probs))
-                cls_conf = float(class_probs[cls_id])
+                    scale_x = float(w) / float(inp_w)
+                    scale_y = float(h) / float(inp_h)
 
-                if cls_conf < self._confidence:
-                    continue
+                    cx = kept[:, 0] * scale_x
+                    cy = kept[:, 1] * scale_y
+                    bw = kept[:, 2] * scale_x
+                    bh = kept[:, 3] * scale_y
 
-                scale_x = float(w) / float(inp_w)
-                scale_y = float(h) / float(inp_h)
+                    x1 = np.clip((cx - (bw / 2.0)).astype(np.int32), 0, max(0, w - 1))
+                    y1 = np.clip((cy - (bh / 2.0)).astype(np.int32), 0, max(0, h - 1))
+                    x2 = np.clip((cx + (bw / 2.0)).astype(np.int32), 0, max(0, w - 1))
+                    y2 = np.clip((cy + (bh / 2.0)).astype(np.int32), 0, max(0, h - 1))
 
-                cx = x * scale_x
-                cy = y * scale_y
-                bw = w_box * scale_x
-                bh = h_box * scale_y
+                    widths = np.maximum(1, x2 - x1).astype(np.int32)
+                    heights = np.maximum(1, y2 - y1).astype(np.int32)
 
-                x1 = int(max(0, cx - bw / 2))
-                y1 = int(max(0, cy - bh / 2))
-                x2 = int(min(w - 1, cx + bw / 2))
-                y2 = int(min(h - 1, cy + bh / 2))
-
-                boxes_xyxy.append([x1, y1, x2, y2])
-                boxes_xywh.append([x1, y1, x2 - x1, y2 - y1])
-                scores.append(cls_conf)
-                classes.append(cls_id)
+                    boxes_xyxy = np.column_stack((x1, y1, x2, y2)).tolist()
+                    boxes_xywh = np.column_stack((x1, y1, widths, heights)).tolist()
+                    scores = kept_scores.astype(np.float32).tolist()
+                    classes = kept_cls_ids.astype(np.int32).tolist()
 
         if boxes_xywh:
             try:
@@ -345,14 +347,16 @@ class ONNXObjectModel:
         else:
             idxs = []
 
+        class_names = self._class_names
         for i in idxs:
             bbox = boxes_xyxy[i]
+            cls_i = int(classes[i])
             detections.append(
                 {
                     "bbox": bbox,
                     "confidence": float(scores[i]),
-                    "class": int(classes[i]),
-                    "class_name": self._class_names.get(int(classes[i]), str(classes[i])),
+                    "class": cls_i,
+                    "class_name": class_names.get(cls_i, str(cls_i)),
                 }
             )
 
